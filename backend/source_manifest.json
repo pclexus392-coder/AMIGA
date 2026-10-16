@@ -1,0 +1,151 @@
+{
+  "source_archive": "amiga-20261015T221710Z-1-001.zip",
+  "archive_sha256": "f62bcdd402ca15ba59a0859813b77046c34a90aad3a553b308cf5a7fbb4f3f4a",
+  "integration_date": "2026-10-16",
+  "files": {
+    "backend/app.py": {
+      "source_sha256": "8ab919275f3bc97cbf35f6f1182d85ee4ce6c2320539221ab18fae955d19da88",
+      "integrated_sha256": "d1d69466a9a356e178c7caa6eb2a418f1163ecd2db5b084cdd8b25e3919f69f1",
+      "adapted": true
+    },
+    "backend/config.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "integrated_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "adapted": false
+    },
+    "backend/create_admin.py": {
+      "source_sha256": "592293d79e86d31285d5429ef3db327949c06a15e146ef359f7dbff7735913c6",
+      "integrated_sha256": "22ef4fac83c622eae233f5c240cb5080580834e6ab99a90d57fec73033a27928",
+      "adapted": true
+    },
+    "backend/requirements.txt": {
+      "source_sha256": "926c5f45e5323404401c4552573e9af06c617c0db28aca4e32008f2e051285e1",
+      "integrated_sha256": "82fb983d288555c12a4920d839c609650285b46b75fc6195a8d24ec896d850ca",
+      "adapted": true
+    },
+    "backend/voucher_service.py": {
+      "source_sha256": "5294ae9a3c67a8700d8737f2771d19e3d645a0277f20c78f7a1e21d09e853fab",
+      "integrated_sha256": "28104382c9d5d3173546e84650c18fdbab6bc87c756db825250974eac38a24ba",
+      "adapted": true
+    },
+    "backend/templates/queue.html": {
+      "source_sha256": "7ab3b736447ff6f0c5527a185e1d8daa3439604fac54cffaaa1ea193c9bb24f8",
+      "integrated_sha256": "7ab3b736447ff6f0c5527a185e1d8daa3439604fac54cffaaa1ea193c9bb24f8",
+      "adapted": false
+    },
+    "backend/templates/upload.html": {
+      "source_sha256": "b280a1a41907ea6dc426ef9653e9c033120c60586d8fd11ad79080986005e708",
+      "integrated_sha256": "b280a1a41907ea6dc426ef9653e9c033120c60586d8fd11ad79080986005e708",
+      "adapted": false
+    },
+    "backend/templates/voucher_preview.html": {
+      "source_sha256": "608f6be60b12611ec9152e8415fb8b03ca513922c42264b2615d94e4473e04d2",
+      "integrated_sha256": "608f6be60b12611ec9152e8415fb8b03ca513922c42264b2615d94e4473e04d2",
+      "adapted": false
+    },
+    "backend/modules/admin/routes.py": {
+      "source_sha256": "d352f899d01efebf3471373ab26fc89bc96fff15ad7113e29eecfa68e1eae0ce",
+      "integrated_sha256": "7103a2cb60683ce89536ad781037cfa586b5187b5aa52ee34ce65cc2d72ac977",
+      "adapted": true
+    },
+    "backend/modules/admin/__init__.py": {
+      "source_sha256": "4bf5aab039243cfa1333c172176c2598159718e290cf4fee99efecb0e30f1997",
+      "integrated_sha256": "4bf5aab039243cfa1333c172176c2598159718e290cf4fee99efecb0e30f1997",
+      "adapted": false
+    },
+    "backend/modules/auth/routes.py": {
+      "source_sha256": "7ea486a80be1bdae030cadf9ead396426b4e0d43c6a2dcfe965b17f493661e77",
+      "integrated_sha256": "7f4dc379f2e3812843a8a084c19895bbb3f1e5527dd13d307a0c3db1ad1a0670",
+      "adapted": true
+    },
+    "backend/modules/auth/__init__.py": {
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "integrated_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "adapted": false
+    },
+    "backend/modules/upload/queue_store.py": {
+      "source_sha256": "0626ac60adbfac3a371f4a1f9b9430fdf9363953d05afccdf54f45a65ab9ca67",
+      "integrated_sha256": "58543dd54bca3ba78bc522179a81c90d30824f7eeb751dbb17b52648d8507dfe",
+      "adapted": true
+    },
+    "backend/modules/upload/queue_worker.py": {
+      "source_sha256": "11d73d090daba9b0e8afeb25e04a33457f09b6434b3a4355aac8991202de4c26",
+      "integrated_sha256": "33a0d1e332fd0de7e6971e68afdc158dfbd3b56a0e4cbc556550da006020b3a1",
+      "adapted": true
+    },
+    "backend/modules/upload/routes.py": {
+      "source_sha256": "0552042374658accc683db53fbbb5ab4b197120bd74505077f1cb7b980bb0b58",
+      "integrated_sha256": "ddef13f1538849f2373603ec15afe5fad6796215d5c7887bfb0c54a217b77e6c",
+      "adapted": true
+    },
+    "backend/modules/upload/service.py": {
+      "source_sha256": "efe00b5c7ba83d2df93f3d7775be1d0569836dd4937122593e436ab1806aa835",
+      "integrated_sha256": "469b60bf7bdb28a654788ec34dd41cc12c0e393efa235bf86326ae33df702c72",
+      "adapted": true
+    }
+  },
+  "runtime_data": {
+    "archived_files": 202,
+    "document_folders": 48,
+    "bytes": 19301794,
+    "private_path": "backend/storage/source-archive",
+    "state": "PRESERVED_UNASSIGNED",
+    "reason": "ZIP document company/user IDs refer to a separate PostgreSQL schema; never guess tenant ownership"
+  },
+  "configuration": "Original private .env retained as backend/.env.source; existing active configuration preserved",
+  "active_entrypoint": "backend.app:create_app",
+  "active_controllers": [
+    "backend/modules/auth/routes.py",
+    "backend/modules/admin/routes.py",
+    "backend/modules/upload/routes.py",
+    "backend/modules/agents/routes.py",
+    "backend/modules/telegram/routes.py"
+  ],
+  "active_pipeline": [
+    "backend/modules/upload/service.py",
+    "backend/modules/upload/portal_adapter.py",
+    "backend/modules/upload/queue_store.py",
+    "backend/modules/upload/queue_worker.py",
+    "backend/voucher_service.py"
+  ],
+  "verification": {
+    "backend_tests": 130,
+    "frontend_tests": 45,
+    "browser": [
+      "local_password",
+      "google_fixture"
+    ],
+    "paid_ai_calls": 3,
+    "postgresql_source": "connection_timeout",
+    "active_data_counts_preserved": true,
+    "bedrock_live_checks": {
+      "date": "2026-10-16",
+      "text_pdf": "passed",
+      "image_only_pdf": "passed",
+      "fictional_documents_only": true,
+      "invoice_items_in_scan": 3
+    },
+    "latest_browser": "local_password_v4_floating_bubble_desktop_mobile_draft_escape_expand_telegram_consent",
+    "v4_paid_ai_calls": 0,
+    "v4_real_telegram_sends": 0,
+    "partner_manifest_files": 146,
+    "bubble_model_calls": "fixture_only"
+  },
+  "workflow_v4": {
+    "schema_version": 4,
+    "tables": 27,
+    "extraction": "AWS Bedrock Nova Lite",
+    "agent_model": "gpt-6-luna",
+    "uploader_confirmation": "version_and_input_fingerprint",
+    "telegram": "optional_explicit_preview_consent"
+  },
+  "ec2_deployment": {
+    "state": "PREPARED_NOT_DEPLOYED",
+    "team": "Kelompok 10",
+    "aws_account_verified": false,
+    "instance_verified": false,
+    "https_verified": false,
+    "public_port": 80,
+    "backend_bind": "127.0.0.1:3000"
+  }
+}

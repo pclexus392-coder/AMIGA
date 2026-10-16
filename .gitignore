@@ -1,0 +1,19 @@
+.env
+.env.local
+backend/.env
+backend/storage/
+__pycache__/
+node_modules/
+frontend/dist/
+*.log
+.venv/
+.runtime-temp/
+backend/requirements.lock
+
+backend/.env.source
+
+# Server credentials and generated deployment artifacts stay private/local.
+deploy/**/*.env
+deploy/**/*.key
+deploy/**/*.pem
+*.tar.gz
