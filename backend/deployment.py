@@ -11,8 +11,11 @@ STATIC_AWS = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
 
 def deployment_errors(values):
     errors = []
-    if values.get('AMIGA_ENV') != 'production':
+    lab_demo = values.get('AMIGA_ENV') == 'lab_demo'
+    if values.get('AMIGA_ENV') not in ('production', 'lab_demo'):
         errors.append('PRODUCTION_MODE_REQUIRED')
+    if lab_demo and values.get('AMIGA_LAB_HTTP_ACK') != '1':
+        errors.append('LAB_HTTP_ACK_REQUIRED')
     if len(values.get('SECRET_KEY') or '') < 32 or 'CHANGE_ME' in (values.get('SECRET_KEY') or ''):
         errors.append('SECRET_KEY_REQUIRED')
     try:
@@ -23,13 +26,13 @@ def deployment_errors(values):
         errors.append('POSTGRESQL_REQUIRED')
     try:
         origin = urlsplit(values.get('PUBLIC_BASE_URL') or '')
-        invalid_origin = (origin.scheme != 'https' or not origin.hostname or origin.username or origin.password
+        invalid_origin = (origin.scheme != ('http' if lab_demo else 'https') or not origin.hostname or origin.username or origin.password
                           or origin.query or origin.fragment or origin.path not in ('', '/')
                           or 'change_me' in origin.hostname.lower() or origin.port == 0)
     except ValueError:
         invalid_origin = True
     if invalid_origin:
-        errors.append('HTTPS_ENDPOINT_REQUIRED')
+        errors.append('LAB_HTTP_ENDPOINT_REQUIRED' if lab_demo else 'HTTPS_ENDPOINT_REQUIRED')
     for name in ('AMIGA_ENV_FILE', 'UPLOAD_DIR'):
         path = values.get(name) or ''
         if not path or not PurePosixPath(path).is_absolute() or '..' in PurePosixPath(path).parts:
@@ -67,4 +70,10 @@ def create_server():
         raise RuntimeError('EC2_CONFIGURATION: ' + ', '.join(errors))
     from .app import create_app
     origin = urlsplit(os.environ['PUBLIC_BASE_URL'])
-    return create_app({'TRUSTED_HOSTS': [origin.hostname, 'localhost', '127.0.0.1']})
+    app = create_app({'TRUSTED_HOSTS': [origin.hostname, 'localhost', '127.0.0.1']})
+    if os.environ.get('AMIGA_ENV') == 'lab_demo':
+        @app.after_request
+        def label_lab(response):
+            response.headers['X-AMIGA-Environment'] = 'lab_demo'
+            return response
+    return app

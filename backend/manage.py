@@ -104,7 +104,7 @@ def main():
             else:
                 email = args.email.strip().lower()
                 if not re.fullmatch(r'[^\s@/]+@[^\s@/]+\.[^\s@/]+', email):
-                    parser.error('Email tidak valid; simpan tanpa /atmin.')
+                    parser.error('Email tidak valid; simpan tanpa /admin.')
                 if args.role in ('CLIENT_OWNER', 'CLIENT_BACKUP') and not args.client:
                     parser.error('--client wajib untuk peran ini.')
                 if any(not db.get(Client, c) for c in args.client):

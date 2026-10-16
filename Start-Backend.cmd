@@ -12,8 +12,8 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo AMIGA dan dua portal: http://localhost:5000/login
-echo Alternatif loopback: http://127.0.0.1:5000/login
+echo AMIGA demo lokal: http://localhost:5002/login
+echo Alternatif loopback: http://127.0.0.1:5002/login
 echo Buat passwordmu sendiri pada halaman aktivasi yang akan terbuka.
-".venv\Scripts\python.exe" -m backend.manage serve --open-browser --reload
+".venv\Scripts\python.exe" -m backend.manage serve --port 5002 --open-browser --reload
 pause

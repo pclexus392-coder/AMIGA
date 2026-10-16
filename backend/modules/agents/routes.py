@@ -8,9 +8,11 @@ from ...api_common import (api,g,current_app,request,body,ok,fail,scoped_request
 from ...models import AgentTurn,WorkRequest,User,Document
 from ...agent_service import agent_role,urgency,reviewer_metrics,reply,validate_reply
 from ...workflow import ready_for_review
+from ...telegram_config import bot_dto
 
 
 def context_for(request_id=None):
+    if roles(g.db,g.actor)=={'COMPANY_CLIENT'}:fail(403,'COMPANY_TRACKING_ONLY','Gunakan portal progres perusahaan.')
     role=agent_role(g.db,g.actor)
     query=select(WorkRequest)
     if role=='uploader':query=query.where(request_access())
@@ -18,15 +20,17 @@ def context_for(request_id=None):
     candidates=list(g.db.scalars(query.order_by(WorkRequest.deadline,WorkRequest.id).limit(201)))
     if role=='reviewer':candidates=[r for r in candidates if r.pic_id==g.actor.id or lifecycle(g.db,r)['state']=='OPEN' and not task_complete(r) and ready_for_review(g.db,r)]
     rows=[request_dto(req) for req in candidates[:100]]
-    cards=[{key:r[key] for key in ('id','client_name','pic_name','deadline','work_status','updated_at','invoice_count','voucher_count')} for r in rows]
+    cards=[{key:r[key] for key in ('id','request_code','client_name','pic_name','deadline','work_status','updated_at','invoice_count','voucher_count')} for r in rows]
     urgent=[u for row in rows if (u:=urgency(row))]
+    codes={r['id']:r['request_code'] for r in rows}
+    for item in urgent:item['request_code']=codes[item['request_id']]
     urgent.sort(key=lambda u:(u['priority']!='HIGH',u['deadline'],u['request_id']))
     result={'role':role,'requests':cards,'urgent':urgent[:30],'truncated':len(candidates)>100,
             'today_jakarta':(datetime.now(timezone.utc)+timedelta(hours=7)).date().isoformat()}
     if request_id:
         req=scoped_request(request_id)
         detail=request_dto(req,True)
-        result['selected_request']={key:detail[key] for key in ('id','client_name','pic_name','deadline','work_status','updated_at','processing','ready_for_review','invoices','telegram')}
+        result['selected_request']={key:detail[key] for key in ('id','request_code','client_name','pic_name','deadline','work_status','updated_at','processing','ready_for_review','invoices','telegram')}
     if role=='admin':result['performance']=reviewer_metrics(g.db)
     return result
 
@@ -42,16 +46,16 @@ def digest(value):
 @api.get('/agents/overview')
 def agent_overview():
     request_id=request.args.get('request_id') or None
-    if request_id and len(request_id)>80:fail(422,'INVALID_REQUEST_ID','Request ID tidak valid.')
+    if request_id and len(request_id)>160:fail(422,'INVALID_REQUEST_ID','Request ID tidak valid.')
     return ok({**context_for(request_id),'model':current_app.config['AGENT_MODEL'],
-               'telegram_configured':bool(current_app.config['TELEGRAM_BOT_TOKEN']),
+               'telegram_configured':bot_dto(current_app.config)['configured'],
                'daily_limit':current_app.config['AGENT_DAILY_LIMIT']})
 
 
 @api.get('/agents/history')
 def agent_history():
     request_id=request.args.get('request_id') or None
-    if request_id:scoped_request(request_id)
+    if request_id:request_id=scoped_request(request_id).id
     role=agent_role(g.db,g.actor)
     rows=list(g.db.scalars(select(AgentTurn).where(AgentTurn.user_id==g.actor.id,AgentTurn.role==role,
         AgentTurn.request_id==request_id,AgentTurn.state=='DONE').order_by(AgentTurn.created_at.desc()).limit(20)))
@@ -64,9 +68,10 @@ def agent_chat():
     if not isinstance(question,str) or not 1<=len(question.strip())<=1000:fail(422,'INVALID_QUESTION','Pertanyaan harus 1–1000 karakter.')
     question=question.strip()
     if not request_id:
-        match=re.search(r'\breq_[0-9a-f]{32}\b',question,re.I)
+        match=re.search(r'\b(?:req_[0-9a-f]{32}|REQ-\d{8}-\d{4,}-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d{4,})\b',question,re.I)
         if match:request_id=match.group()
-    if request_id is not None and (not isinstance(request_id,str) or len(request_id)>80):fail(422,'INVALID_REQUEST_ID','Request ID tidak valid.')
+    if request_id is not None and (not isinstance(request_id,str) or len(request_id)>160):fail(422,'INVALID_REQUEST_ID','Request ID tidak valid.')
+    if request_id:request_id=scoped_request(request_id).id
     g.db.refresh(g.actor,with_for_update=True)
     context=context_for(request_id);role=context['role'];fingerprint=digest({'context':context,'question':question})
     cached=g.db.scalar(select(AgentTurn).where(AgentTurn.user_id==g.actor.id,AgentTurn.role==role,

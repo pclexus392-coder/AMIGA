@@ -74,7 +74,7 @@ try{
     await page.getByRole('heading',{name:'Siapkan akun pemilik',exact:true}).waitFor();
     assert.equal(new URL(page.url()).hash,'','Setup capability must leave address bar immediately');
     await page.reload();await page.getByRole('heading',{name:'Siapkan akun pemilik',exact:true}).waitFor();
-    assert.equal(await page.locator('#login-email').inputValue(),'admin@example.test/atmin');
+    assert.equal(await page.locator('#login-email').inputValue(),'admin@example.test/admin');
     await page.locator('#login-name').fill('Admin Uji');
     await page.locator('#login-password').fill('Fictional-AMIGA-Password!');
     await page.locator('#login-password-confirm').fill('Fictional-AMIGA-Password!');
@@ -91,7 +91,7 @@ try{
   assert.doesNotMatch(await page.locator('body').innerText(),/backend|frontend|pratinjau lokal|siapkan login/i);
   assert.equal(await page.locator('#login-intent').isVisible(),false);
   await page.locator('.login-card').screenshot({path:path.join(qaDirectory,'login-card-dark.png')});
-  await page.locator('#login-email').fill(localAuth?'pending@example.test/review':'pending@example.test/atmin');
+  await page.locator('#login-email').fill(localAuth?'pending@example.test/review':'pending@example.test/admin');
   assert.equal(await page.locator('#login-intent').isVisible(),true);
   assert.ok(page.url().includes('/login'));
   await page.screenshot({path:path.join(qaDirectory,'login-admin-trigger-dark.png'),fullPage:true});
@@ -101,7 +101,7 @@ try{
     assert.equal(await page.locator('#login-email').inputValue(),'pending@example.test/review');
     await page.locator('#login-email').fill('pending@example.test/view');
     assert.equal(await page.locator('#login-intent').innerText(),'Aktivasi reviewer');
-    await page.locator('#login-email').fill('pending@example.test/atmin');
+    await page.locator('#login-email').fill('pending@example.test/admin');
     assert.equal(await page.locator('#login-intent').innerText(),'Aktivasi admin');
     await page.locator('#login-email').fill('pending@example.test');
     assert.equal(await page.locator('#login-intent').isVisible(),false);
@@ -112,9 +112,10 @@ try{
     await page.locator('#login-password-confirm').fill('Fictional-AMIGA-Password!');
     await page.locator('#login-submit').click();
     await page.locator('#logout').waitFor();
-  }else await login('pending-admin','pending@example.test/atmin');
-  assert.ok(page.url().includes('/pending'));
-  await page.getByRole('heading',{name:localAuth?'Permintaan aktivasi reviewer':'Permintaan aktivasi admin',exact:true}).waitFor();
+  }else await login('pending-admin','pending@example.test/admin');
+  assert.ok(page.url().includes(localAuth?'/reviewer':'/pending'));
+  if(localAuth)await page.getByRole('link',{name:'Tugas saya',exact:true}).waitFor();
+  else await page.getByRole('heading',{name:'Permintaan aktivasi admin',exact:true}).waitFor();
   await idle();await page.locator('#logout').click();
   await page.locator('#login-form').waitFor();
   assert.equal(await page.locator('.assistant-widget').count(),0,'Logout must remove assistant drafts and conversation UI');
@@ -227,15 +228,16 @@ try{
   await page.locator('#agent-question').fill('Request invoice ini sudah sampai mana?');
   await page.locator('#agent-send').click();
   await page.getByText(/Fixture asisten uploader:/).waitFor();
-  assert.equal(await page.locator('#telegram-connect').isDisabled(),true,'Telegram is optional when the bot is not configured');
-  await call({fixture_telegram_enable:true});
-  await page.locator('#agent-context-form').evaluate(form=>form.requestSubmit());
+  assert.equal(await page.locator('#telegram-connect').count(),0,'Uploader assistant contains no bot controls');
+  await page.goto('http://127.0.0.1:53919/client#upload');
+  await page.locator('#telegram-contact').waitFor();
+  await call({fixture_telegram_enable:true});await page.reload();
   await page.locator('#telegram-connect:not([disabled])').waitFor();
   await page.locator('#telegram-connect').click();
   const telegramURL=await page.locator('#telegram-link-target a').getAttribute('href');
   await call({fixture_telegram_start:new URL(telegramURL).searchParams.get('start')});
   await page.locator('#telegram-verify').click();
-  await page.getByText('Telegram terhubung sebagai @fictional_uploader.',{exact:true}).waitFor();
+  await page.getByText('Penerima terverifikasi: @fictional_uploader.',{exact:true}).waitFor();
   await page.screenshot({path:path.join(qaDirectory,'agent-uploader.png'),fullPage:true});
   await idle();await page.locator('#logout').click();
   await page.locator('#login-form').waitFor();
@@ -292,7 +294,7 @@ try{
   await page.locator('#agent-question').fill('Ringkaskan hasil review dan siapkan pesan Telegram.');
   await page.locator('#agent-send').click();await page.getByText(/Fixture asisten reviewer:/).waitFor();
   await page.locator('.assistant-details>summary').filter({hasText:'Kirim hasil ke Telegram uploader'}).click();
-  await page.locator('#telegram-attach').check();await page.locator('#telegram-prepare').click();
+  assert.equal(await page.locator('#telegram-attach').isChecked(),true);await page.locator('#telegram-prepare').click();
   await page.getByRole('heading',{name:'Pratinjau sebelum dikirim',exact:true}).waitFor();
   assert.equal(await page.locator('#telegram-dispatch').isDisabled(),true);
   const draft=await page.locator('#telegram-message').inputValue();
@@ -362,8 +364,8 @@ try{
   await page.getByRole('link',{name:'Reviewer & akun',exact:true}).click();
   await page.locator('.access-form[data-user="owner"]').waitFor();
   if(localAuth){
-    await page.locator('.approve-reviewer').click();
-    await page.getByText('Reviewer aktif. Ia cukup login ulang untuk mulai mengambil tugas.',{exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Status reviewer',exact:true}).waitFor();
+    assert.equal(await page.locator('.approve-reviewer').count(),0);
     await idle();
   }
   const form=page.locator('.access-form[data-user="other"]');
@@ -376,7 +378,7 @@ try{
   assert.equal(await page.locator('.assistant-widget').count(),0,'Logout must remove assistant drafts and conversation UI');
   if(localAuth){
     await login('new-reviewer','pending@example.test');
-    assert.ok(page.url().includes('/reviewer'),'Approved /review account must retain reviewer role with a plain email');
+    assert.ok(page.url().includes('/reviewer'),'Self-registered /review account must retain reviewer role with a plain email');
     await page.getByRole('link',{name:'Tugas saya',exact:true}).waitFor();
     await idle();await page.locator('#logout').click();await page.locator('#login-form').waitFor();
   }
@@ -485,7 +487,7 @@ try{
   await page.screenshot({path:path.join(qaDirectory,'primary-backend-photo.png'),fullPage:true});
   await idle();await page.locator('#logout').click();await page.locator('#login-form').waitFor();
   assert.deepEqual(errors,[]);
-  console.log(`Browser integration PASS (${localAuth?'real bcrypt/JWT, no Google':'Google fixture'}): floating bubble desktop/mobile, Escape/draft/expand, reviewer consent inside bubble, registration/login, single form, /atmin authorization, role routing, upload/revision, approval/PDF, one-time reviewer approval without client assignment, task claim, AI assistance, unsaved changes, client handover, voucher workspace publishing, closure/revision, primary ZIP voucher renderer, photo-to-PDF/original preview, monitoring, themes and mobile. Extraction uses isolated fixtures.`);
+  console.log(`Browser integration PASS (${localAuth?'real bcrypt/JWT, no Google':'Google fixture'}): floating bubble desktop/mobile, Escape/draft/expand, reviewer consent inside bubble, registration/login, single form, /admin authorization, role routing, upload/revision, approval/PDF, direct reviewer registration with admin enable/disable controls, task claim, AI assistance, unsaved changes, client handover, voucher workspace publishing, closure/revision, primary ZIP voucher renderer, photo-to-PDF/original preview, monitoring, themes and mobile. Extraction uses isolated fixtures.`);
 }catch(error){
   if(page){console.log((await page.locator('body').innerText()).slice(-2500));await page.screenshot({path:path.join(qaDirectory,'failure.png'),fullPage:true});}
   throw error;

@@ -38,5 +38,5 @@ def configure_google(env_file, client_id=None):
     save_google_client_id(client_id, env_file)
     print('Google Client ID tersimpan. Pengaturan admin dan database dipertahankan.')
     print('Tutup aplikasi AMIGA yang sedang berjalan, lalu jalankan ulang Start-AMIGA.cmd.')
-    print('Buka http://localhost:5000/login dan gunakan Gmail admin /atmin untuk aktivasi pertama.')
+    print('Buka http://localhost:5000/login dan gunakan Gmail admin /admin untuk aktivasi pertama.')
     print('Penyimpanan konfigurasi ini belum menyatakan login Google berhasil diverifikasi.')

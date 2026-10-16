@@ -104,6 +104,7 @@ input[type='checkbox'],input[type='radio'] { min-height: 0; width: 18px; height:
 .task-card .metric { flex-wrap: wrap; gap: 8px; }
 .split { grid-template-columns: minmax(0,.8fr) minmax(0,1.2fr); }
 .review-items input { min-width: 112px; }
+.review-items input[data-money] { min-width: 180px; }
 .review-items input[data-item='description'] { min-width: 220px; }
 .work-stages { gap: 16px; }
 .work-stages li { overflow-wrap: anywhere; }

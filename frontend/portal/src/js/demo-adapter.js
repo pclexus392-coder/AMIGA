@@ -6,7 +6,7 @@ import {inspectPDF,renderPDF} from './pdf.js';
 export const DEMO_ACCOUNTS=[
   {id:'owner-a',email:'klien-a@amiga.example',name:'Nadia',roles:['CLIENT_OWNER'],clients:['A']},
   {id:'finance',email:'reviewer@amiga.example',name:'Rani',roles:['FINANCE_REVIEWER'],clients:['A','B']},
-  {id:'admin',email:'atmin@amiga.example',name:'Sinta',roles:['SYSTEM_ADMIN'],clients:['A','B']},
+  {id:'admin',email:'admin@amiga.example',name:'Sinta',roles:['SYSTEM_ADMIN'],clients:['A','B']},
   {id:'lead',email:'lead@amiga.example',name:'Dimas',roles:['SERVICE_LEAD'],clients:['A','B']},
   {id:'backup-a',email:'backup-a@amiga.example',name:'Bima',roles:['CLIENT_BACKUP'],clients:['A']},
   {id:'owner-b',email:'klien-b@amiga.example',name:'Arif',roles:['CLIENT_OWNER'],clients:['B']}
@@ -20,9 +20,10 @@ export class DemoAdapter{
   async seed(){for(const [fid,client,actor]of [['normal','A','owner-a'],['missing','A','owner-a'],['normal','B','owner-b']]){const f=this.fixtures.find(x=>x.id===fid),response=await fetch('/portal/public/fixtures/'+f.file);if(!response.ok)throw Error('PDF fixture belum tersedia.');const bytes=new Uint8Array(await response.arrayBuffer()),key=await this.files.storeFile(bytes);await this.service.submit(actor,{client,date:dateKey(new Date()),due:'2026-10-22',requestType:'Invoice vendor',channel:'Portal'},{type:'INVOICE',name:f.file,hash:f.sha256,pages:f.pages,size:bytes.length,storageKey:key});}}
   async config(){return {auth_configured:false,google_client_id:null,csrf_token:'DEMO_ONLY',warning:'Pratinjau lokal, bukan autentikasi Google.'};}
   async login({email_input}){
-    const {email,adminRequested,reviewerRequested}=parseEmailInput(email_input),account=DEMO_ACCOUNTS.find(a=>a.email===email);
+    const {email,adminRequested,reviewerRequested}=parseEmailInput(email_input);let account=DEMO_ACCOUNTS.find(a=>a.email===email);
+    if(!account&&reviewerRequested){account={id:'reviewer-demo:'+email,email,name:email.split('@')[0],roles:['FINANCE_REVIEWER'],clients:['A','B']};DEMO_ACCOUNTS.push(account);USERS.push({id:account.id,name:account.name,roles:['REVIEWER'],clients:account.clients});}
     if(account&&(!adminRequested||account.roles.includes('SYSTEM_ADMIN'))&&(!reviewerRequested||account.roles.some(r=>['FINANCE_REVIEWER','SERVICE_LEAD'].includes(r)))){this.session={user:{id:account.id,email,display_name:account.name,roles:account.roles,account_status:'ACTIVE',clients:account.clients.map(id=>({id,name:'Klien '+id}))},expires_at:new Date(Date.now()+7*86400000).toISOString()};}
-    else{this.session={user:{id:'pending-demo',email,display_name:email.split('@')[0],roles:[],account_status:adminRequested?'PENDING_ADMIN':reviewerRequested?'PENDING_REVIEWER':'PENDING_CLIENT',clients:[]},expires_at:new Date(Date.now()+7*86400000).toISOString()};}
+    else{this.session={user:{id:'pending-demo',email,display_name:email.split('@')[0],roles:reviewerRequested?['FINANCE_REVIEWER']:[],account_status:adminRequested?'PENDING_ADMIN':reviewerRequested?'ACTIVE':'PENDING_CLIENT',clients:[]},expires_at:new Date(Date.now()+7*86400000).toISOString()};}
     if((this.state.disabledUsers??[]).includes(this.session.user.id))this.session.user.account_status='DISABLED';
     this.session.portal=portalForUser(this.session.user);this.saveSession();return clone(this.session);
   }

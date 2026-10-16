@@ -38,7 +38,7 @@ def configure_workspace(app, overrides=None):
         TELEGRAM_BOT_TOKEN=os.getenv('TELEGRAM_BOT_TOKEN', '').strip(),
         TELEGRAM_BOT_USERNAME=os.getenv('TELEGRAM_BOT_USERNAME', '').strip().lstrip('@'),
         START_QUEUE_WORKER=os.getenv('START_QUEUE_WORKER', '1') == '1',
-        SESSION_HOURS=int(os.getenv('SESSION_HOURS', '8')), SESSION_COOKIE_NAME='amiga_session', SESSION_COOKIE_HTTPONLY=True,
+        SESSION_HOURS=int(os.getenv('SESSION_HOURS', '8')), SESSION_COOKIE_NAME='amiga_local_review_session', SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=production,
         MAX_CONTENT_LENGTH=32 * 1024 * 1024, FILE_LIMIT=10 * 1024 * 1024, PAGE_LIMIT=5,
         IDR_TOLERANCE='1', DEFAULT_TOLERANCE='0.01',
@@ -53,7 +53,7 @@ def configure_workspace(app, overrides=None):
         raise RuntimeError('AUTH_METHOD must be local_password or google.')
     if not 1 <= app.config['SESSION_HOURS'] <= 24:
         raise RuntimeError('SESSION_HOURS must be between 1 and 24.')
-    if any(app.config.get(key) for key in ('TOKEN_VERIFIER','EXTRACTOR','REVIEW_ANALYZER','INITIAL_ANALYZER','AGENT_RESPONDER','TELEGRAM_TRANSPORT')) and not app.testing:
+    if any(app.config.get(key) for key in ('TOKEN_VERIFIER','EXTRACTOR','REVIEW_ANALYZER','INITIAL_ANALYZER','AGENT_RESPONDER','TELEGRAM_TRANSPORT','SIGNATURE_ANALYZER','TAX_ANALYZER')) and not app.testing:
         raise RuntimeError('Injected identity/extraction is permitted only in isolated tests.')
     if app.config['PRODUCTION'] and (not app.config['SECRET_KEY'] or len(app.config['SECRET_KEY']) < 32 or not app.config['SESSION_COOKIE_SECURE']
                                    or not app.config['DATABASE_URL'].startswith('postgresql')):
@@ -93,14 +93,18 @@ def configure_workspace(app, overrides=None):
     factory = sessionmaker(engine, expire_on_commit=False)
     app.extensions['amiga_db'], app.extensions['amiga_engine'] = factory, engine
     with factory.begin() as db:
+        if engine.dialect.name == 'sqlite':db.execute(text('BEGIN IMMEDIATE'))
         if db.get(Setting, 'schema_version') is None:
-            db.add(Setting(key='schema_version', value='4'))
-        elif db.get(Setting, 'schema_version').value in ('1', '2', '3') and initialize:
-            db.get(Setting, 'schema_version').value = '4'
-        elif db.get(Setting, 'schema_version').value != '4':
+            db.add(Setting(key='schema_version', value='8'))
+        elif db.get(Setting, 'schema_version').value in ('1', '2', '3', '4', '5', '6', '7') and initialize:
+            db.get(Setting, 'schema_version').value = '8'
+        elif db.get(Setting, 'schema_version').value != '8':
             raise RuntimeError('Unsupported database schema. Apply the reviewed migration first.')
         if db.get(Setting, 'bootstrap_consumed') is None:
             db.add(Setting(key='bootstrap_consumed', value='0'))
+
+        from .request_numbers import backfill_request_numbers
+        backfill_request_numbers(db)
 
     @app.before_request
     def prepare():
@@ -113,7 +117,7 @@ def configure_workspace(app, overrides=None):
                 token, expected = request.headers.get('X-CSRF-Token', ''), session.get('csrf', '')
                 if not token or not expected or not secrets.compare_digest(token, expected):
                     raise ApiFault(403, 'CSRF', 'Sesi formulir tidak valid. Muat ulang halaman.')
-            if request.path not in ('/api/auth/csrf', '/api/auth/google', '/api/auth/login', '/api/auth/register', '/api/auth/owner-setup'):
+            if request.path not in ('/api/auth/csrf', '/api/auth/google', '/api/auth/login', '/api/auth/register', '/api/auth/owner-setup', '/api/auth/password/change', '/api/auth/password/reset'):
                 from .api import authenticate
                 authenticate()
                 if request.path not in ('/api/auth/me', '/api/auth/logout') and g.actor.account_status != 'ACTIVE':
@@ -135,7 +139,7 @@ def configure_workspace(app, overrides=None):
         response.headers['X-Frame-Options'] = 'DENY'
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
-        if not app.config['PRODUCTION'] and (request.path in ('/', '/login', '/admin', '/reviewer', '/client', '/pending') or request.path.startswith('/portal/')):
+        if not app.config['PRODUCTION'] and (request.path in ('/', '/login', '/admin', '/reviewer', '/client', '/uploader', '/pending') or request.path.startswith('/portal/')):
             response.headers['Cache-Control'] = 'no-store'
         return response
 
@@ -175,6 +179,7 @@ def configure_workspace(app, overrides=None):
     @app.get('/admin')
     @app.get('/reviewer')
     @app.get('/client')
+    @app.get('/uploader')
     @app.get('/pending')
     def portal_page():
         return send_from_directory(portal, 'index.html')
@@ -185,7 +190,7 @@ def configure_workspace(app, overrides=None):
 
     @app.get('/health')
     def health():
-        return jsonify(status='ok', service='AMIGA', backend_source='amiga-20261015T221710Z-1-001', schema_version=4, review_workflow='uploader_confirmation_v2', auth_method=app.config['AUTH_METHOD'], run_id=app.config['RUN_ID'],
+        return jsonify(status='ok', service='AMIGA', backend_source='amiga-20261015T221710Z-1-001', schema_version=8, review_workflow='uploader_confirmation_v2', auth_method=app.config['AUTH_METHOD'], run_id=app.config['RUN_ID'],
                        ai_provider=app.config['AI_PROVIDER'], ai_model=app.config['OPENAI_MODEL'] if app.config['AI_PROVIDER']=='openai' else app.config['BEDROCK_MODEL_ID'])
 
     if app.config['START_QUEUE_WORKER'] and not app.testing:

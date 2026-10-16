@@ -34,6 +34,24 @@ class DeploymentTests(unittest.TestCase):
             self.assertIs(result,factory.return_value)
             self.assertEqual(factory.call_args.args[0]['TRUSTED_HOSTS'],['amiga.example.test','localhost','127.0.0.1'])
 
+    def test_lab_http_requires_explicit_ack_and_cannot_relax_production_tls(self):
+        values=self.values()
+        values.update(AMIGA_ENV='lab_demo', PUBLIC_BASE_URL='http://amiga.example.test')
+        self.assertIn('LAB_HTTP_ACK_REQUIRED',deployment_errors(values))
+        values['AMIGA_LAB_HTTP_ACK']='1'
+        self.assertEqual(deployment_errors(values),[])
+        values['AMIGA_ENV']='production'
+        self.assertIn('HTTPS_ENDPOINT_REQUIRED',deployment_errors(values))
+
+    def test_lab_http_still_requires_postgresql_and_instance_role(self):
+        values=self.values()
+        values.update(AMIGA_ENV='lab_demo', AMIGA_LAB_HTTP_ACK='1',
+                      PUBLIC_BASE_URL='http://amiga.example.test', DATABASE_URL='sqlite:///demo.db',
+                      AWS_PROFILE='fictional')
+        errors=deployment_errors(values)
+        self.assertIn('POSTGRESQL_REQUIRED',errors)
+        self.assertIn('EC2_INSTANCE_ROLE_REQUIRED',errors)
+
     def test_wrong_region_vision_model_and_tls_placeholders_fail_closed(self):
         values=self.values();values.update(AWS_REGION='ap-southeast-1', BEDROCK_MODEL_ID='us.amazon.nova-micro-v1:0', PUBLIC_BASE_URL='https://CHANGE_ME')
         self.assertIn('HTTPS_ENDPOINT_REQUIRED',deployment_errors(values))
@@ -61,3 +79,20 @@ class DeploymentTests(unittest.TestCase):
         nginx=(root/'deploy/ec2/nginx-amiga.conf').read_text(encoding='utf-8')
         self.assertIn('listen 80;',nginx)
         self.assertIn('proxy_pass http://127.0.0.1:3000;',nginx)
+
+    def test_release_includes_pdf_renderer_worker_and_license(self):
+        root=Path(__file__).resolve().parents[2]
+        names={p.relative_to(root).as_posix() for p in release_files(root)}
+        for name in ('frontend/portal/vendor/pdfjs/pdf.mjs',
+                     'frontend/portal/vendor/pdfjs/pdf.worker.mjs',
+                     'frontend/portal/vendor/pdfjs/LICENSE'):
+            self.assertIn(name,names)
+
+    def test_release_has_all_static_relative_portal_module_imports(self):
+        import re
+        root=Path(__file__).resolve().parents[2]
+        files=set(release_files(root))
+        for path in (root/'frontend/portal/src/js').glob('*.js'):
+            for match in re.finditer(r"(?:from\s*|import\s*)['\"](\.[^'\"]+)['\"]",path.read_text(encoding='utf-8')):
+                target=(path.parent/match.group(1)).resolve()
+                self.assertIn(target,files,f'Missing release dependency from {path.name}: {match.group(1)}')

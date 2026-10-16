@@ -16,9 +16,10 @@ DUMMY_HASH = bcrypt.hashpw(b'amiga-dummy-credential', bcrypt.gensalt(rounds=12))
 def parse_identity(value):
     if not isinstance(value, str) or len(value) > 280:
         raise ValueError('Email tidak valid.')
-    marker = re.search(r'\s*/(atmin|review|view)\s*$', value, re.I)
-    requested_role = {'atmin': 'SYSTEM_ADMIN', 'review': 'FINANCE_REVIEWER', 'view': 'FINANCE_REVIEWER'}.get(marker.group(1).lower()) if marker else None
-    email = re.sub(r'\s*/(?:atmin|review|view)\s*$', '', value, flags=re.I).strip().lower()
+    marker = re.search(r'\s*/(admin|review|view|uploder|uploader)\s*$', value, re.I)
+    requested_role = {'admin': 'SYSTEM_ADMIN', 'review': 'FINANCE_REVIEWER', 'view': 'FINANCE_REVIEWER',
+                      'uploder': 'CLIENT_OWNER', 'uploader': 'CLIENT_OWNER'}.get(marker.group(1).lower()) if marker else None
+    email = (value[:marker.start()] if marker else value).strip().lower()
     if len(email) > 254 or not re.fullmatch(r'[^\s@/]+@[^\s@/]+\.[^\s@/]+', email):
         raise ValueError('Email tidak valid.')
     return email, requested_role
@@ -97,7 +98,7 @@ def owner_setup_record(db, token, email):
 
 
 def setup_admin(app, password_reader=None):
-    """Local operator creates a password once; /atmin activates the role later."""
+    """Local operator creates a password once; /admin activates the role later."""
     if app.config['AUTH_METHOD'] != 'local_password':
         return False
     email, _ = parse_email(app.config['ADMIN_BOOTSTRAP_EMAIL'])
@@ -147,5 +148,5 @@ def setup_admin(app, password_reader=None):
         if not is_admin:
             user.account_status = 'PENDING_ADMIN'
         audit(db, 'LOCAL_PASSWORD_CONFIGURED', actor_id=user.id, reason='Trusted local operator setup')
-    print('Password AMIGA tersimpan. Masuk pertama dengan email/atmin, berikutnya cukup email biasa.')
+    print('Password AMIGA tersimpan. Masuk pertama dengan email/admin, berikutnya cukup email biasa.')
     return True

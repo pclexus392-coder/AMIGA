@@ -18,14 +18,14 @@ class LifecycleTests(unittest.TestCase):
     def detail(self, req):
         return self.a.actor('owner').get('/api/requests/' + req['id']).json['data']
 
-    def transition(self, req, action='CLOSE', actor='owner', **overrides):
+    def transition(self, req, action='CLOSE', actor='company', **overrides):
         payload = dict(action=action, reason='Hasil sudah diperiksa oleh klien.',
                        expected_lifecycle_revision=req['lifecycle']['revision'],
                        expected_versions={i['id']: i['current_version'] for i in req['invoices']})
         payload.update(overrides)
         return self.a.call(actor, 'POST', f"/api/requests/{req['id']}/lifecycle", json=payload)
 
-    def download(self, req, actor='owner', index=0):
+    def download(self, req, actor='company', index=0):
         inv = req['invoices'][index]
         return self.a.call(actor, 'POST', f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/download",
                            json={'expected_version': inv['current_version']})
@@ -43,7 +43,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(req['work_status'], 'IN_REVIEW')
         self.a.decision(req, action='reject', reason='Lengkapi rincian biaya.')
         self.assertEqual(self.detail(req)['work_status'], 'WAITING_CLIENT')
-        self.assertEqual(self.a.revise(req).status_code, 200)
+        self.assertEqual(self.a.revise(req, fields={**req['invoices'][0]['fields'], 'vendor_name': 'Vendor Uji Terkoreksi'}).status_code, 200)
         self.assertEqual(self.detail(req)['work_status'], 'WAITING_UPLOADER')
 
     def test_only_client_can_close_after_all_latest_vouchers_downloaded(self):
@@ -114,19 +114,19 @@ class LifecycleTests(unittest.TestCase):
     def test_double_close_has_one_winner_and_one_audit(self):
         req = self.ready()
         # Separate clients/cookies represent two browser sessions of the same tenant.
-        self.a.actor('dual')
+        self.a.actor('company2')
         with ThreadPoolExecutor(max_workers=2) as pool:
-            statuses = list(pool.map(lambda actor:self.transition(req,actor=actor).status_code,['owner','dual']))
+            statuses = list(pool.map(lambda actor:self.transition(req,actor=actor).status_code,['company','company2']))
         self.assertEqual(sorted(statuses),[200,409])
         with self.a.app.extensions['amiga_db']() as db:
             self.assertEqual(db.scalar(select(func.count()).select_from(Audit).where(Audit.action=='REQUEST_CLOSED')),1)
 
     def test_close_racing_invoice_edit_cannot_leave_a_closed_unreviewed_request(self):
         req = self.ready()
-        self.a.actor('dual')
+        self.a.actor('company2')
         with ThreadPoolExecutor(max_workers=2) as pool:
             close = pool.submit(self.transition, req)
-            edit = pool.submit(self.a.revise, req, 'dual')
+            edit = pool.submit(self.a.revise, req, 'owner', fields={**req['invoices'][0]['fields'],'vendor_name':'Vendor terkoreksi'})
             self.assertEqual(sorted([close.result().status_code,edit.result().status_code]),[200,409])
         fresh = self.detail(req)
         if fresh['lifecycle']['state']=='CLOSED':
@@ -161,7 +161,7 @@ class LifecycleTests(unittest.TestCase):
         app = create_app({**config,'TESTING':True,'START_QUEUE_WORKER':False,'OPENAI_API_KEY':''})
         try:
             with app.extensions['amiga_db']() as db:
-                self.assertEqual(db.get(Setting,'schema_version').value,'4')
+                self.assertEqual(db.get(Setting,'schema_version').value,'8')
                 self.assertEqual(db.scalar(select(func.count()).select_from(RequestLifecycle)),0)
             self.assertEqual(self.detail(req)['lifecycle']['state'],'OPEN')
         finally:

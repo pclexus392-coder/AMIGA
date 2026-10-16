@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from botocore.exceptions import ClientError, NoCredentialsError, EndpointConnectionError
 from backend.modules.upload import service
 from backend.modules.upload.portal_adapter import extract_for_portal, to_source_invoice
-from backend.validation import normalize
+from backend.validation import normalize, validate
 from test_api import invoice_fields, pdf_bytes
 
 MODEL='apac.amazon.nova-lite-v1:0'
@@ -42,6 +42,19 @@ class BedrockExtractorTests(unittest.TestCase):
         self.assertEqual(result['invoices'][0]['account_number'],'0000123')
         self.assertEqual(result['provider'],'bedrock')
         json.dumps(result)
+
+    def test_invoice_tax_zero_and_unknown_remain_distinct_through_pipeline(self):
+        path=self.path/'invoice.pdf'
+        path.write_bytes(pdf_bytes('Fictional invoice with explicit zero tax or unknown invoice tax.'))
+        for tax in (0, '0', None):
+            source=copy.deepcopy(self.source);source['tax_amount']=tax
+            client=Mock();client.converse.return_value=response(json.dumps({'invoices':[source]}))
+            with self.subTest(tax=tax),patch.object(service.boto3,'client',return_value=client):
+                result=extract_for_portal(path,{'AI_PROVIDER':'bedrock','BEDROCK_MODEL_ID':MODEL,'AWS_REGION':'ap-southeast-1'})
+                fields=normalize(result['invoices'][0])
+                self.assertEqual(fields['invoice_tax_amount'],None if tax is None else '0')
+                codes=[issue['code'] for issue in validate(fields,1,len(fields['line_items']))['issues']]
+                self.assertEqual('UNKNOWN_INVOICE_AMOUNT' in codes,tax is None)
 
     def test_scanned_pages_are_separate_requests_and_no_partial_ocr_file_is_published(self):
         path=self.path/'scan.pdf';path.write_bytes(pdf_bytes('',pages=2))

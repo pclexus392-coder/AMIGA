@@ -63,7 +63,7 @@ def normalize(fields):
     return result
 
 
-def validate(fields, version, expected_count, extra_issues=(), resolutions=None, tolerance='1'):
+def validate(fields, version, expected_count, extra_issues=(), resolutions=None, tolerance='1',source_withholding='0'):
     issues = list(extra_issues)
     def flag(code, message, field=None):
         issues.append({'code': code, 'severity': 'BLOCK', 'message': message, 'field': field, 'resolved': False})
@@ -74,7 +74,7 @@ def validate(fields, version, expected_count, extra_issues=(), resolutions=None,
     if not items:
         flag('MISSING_ITEMS', 'Belum ada rincian item.')
     if expected_count is None or expected_count != len(items):
-        flag('ITEM_COUNT_UNCONFIRMED', 'Bandingkan seluruh item dengan dokumen dan konfirmasi jumlahnya.')
+        flag('ITEM_COUNT_UNCONFIRMED', 'Periksa seluruh item hasil pemeriksaan dan konfirmasi jumlahnya.')
     calculated = []
     tol = Decimal(tolerance)
     with localcontext() as ctx:
@@ -92,19 +92,19 @@ def validate(fields, version, expected_count, extra_issues=(), resolutions=None,
             computed = (quantity * price - discount + tax).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
             calculated.append(computed)
             if computed < 0 or (reported is not None and abs(computed - Decimal(reported).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)) > tol):
-                flag('LINE_TOTAL_MISMATCH', f'Perhitungan item {index + 1} berbeda dari dokumen.')
+                flag('LINE_TOTAL_MISMATCH', f'Perhitungan item {index + 1} berbeda dari total baris yang disimpan.')
         subtotal = sum(calculated, Decimal(0)) if items and len(calculated) == len(items) else None
         total = delta = None
         if any(fields[k] is None for k in MONEY_FIELDS):
             flag('UNKNOWN_INVOICE_AMOUNT', 'Subtotal, diskon, pajak, dan total harus terkonfirmasi.')
         if subtotal is not None:
             if fields['subtotal'] is not None and abs(subtotal - Decimal(fields['subtotal']).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)) > tol:
-                flag('SUBTOTAL_MISMATCH', 'Jumlah item berbeda dengan subtotal dokumen.')
+                flag('SUBTOTAL_MISMATCH', 'Jumlah item berbeda dengan subtotal yang disimpan.')
             if fields['invoice_discount_amount'] is not None and fields['invoice_tax_amount'] is not None:
-                total = (subtotal - Decimal(fields['invoice_discount_amount']) + Decimal(fields['invoice_tax_amount'])).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                total = (subtotal - Decimal(fields['invoice_discount_amount']) + Decimal(fields['invoice_tax_amount']) - Decimal(source_withholding)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 delta = total - Decimal(fields['total_amount']).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if fields['total_amount'] is not None else None
                 if total < 0 or (delta is not None and abs(delta) > tol):
-                    flag('TOTAL_MISMATCH', 'Total perhitungan berbeda dengan total dokumen.')
+                    flag('TOTAL_MISMATCH', 'Total perhitungan berbeda dengan total yang disimpan.')
     if fields['invoice_date'] and fields['invoice_date'] > date.today().isoformat():
         flag('SUSPICIOUS_DATE', 'Tanggal invoice berada di masa depan.')
     for issue in issues:

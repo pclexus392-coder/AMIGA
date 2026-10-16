@@ -22,7 +22,7 @@ def release_files(root=ROOT):
                 continue
             if folder == 'backend' and path.suffix != '.py' and path.name != 'requirements.txt':
                 continue
-            if path.suffix.lower() not in {'.py', '.txt', '.html', '.css', '.js', '.json', '.sql', '.png', '.svg', '.woff2', '.pdf', '.service', '.example', '.conf'}:
+            if path.name not in {'LICENSE', 'NOTICE'} and path.suffix.lower() not in {'.py', '.txt', '.html', '.css', '.js', '.mjs', '.json', '.sql', '.png', '.svg', '.woff2', '.pdf', '.service', '.example', '.conf'}:
                 continue
             files.append(path)
     for name in ('.gitattributes', 'DEPLOY_EC2.md', 'API_TERBARU.md'):

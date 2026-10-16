@@ -24,8 +24,9 @@ from .request_lifecycle import lifecycle, require_open, progress, client_actions
 from .workflow import source_document,assistance_dto,confirmation_dto,ready_for_review
 
 api = Blueprint('api', __name__, url_prefix='/api')
-ALL_ROLES = {'SYSTEM_ADMIN', 'FINANCE_REVIEWER', 'SERVICE_LEAD', 'CLIENT_OWNER', 'CLIENT_BACKUP'}
+ALL_ROLES = {'SYSTEM_ADMIN', 'FINANCE_REVIEWER', 'SERVICE_LEAD', 'CLIENT_OWNER', 'CLIENT_BACKUP', 'COMPANY_CLIENT'}
 CLIENT_ROLES = {'CLIENT_OWNER', 'CLIENT_BACKUP'}
+COMPANY_ROLES = {'COMPANY_CLIENT'}
 RESOLVABLE = {'DUPLICATE_FILE', 'POSSIBLE_DUPLICATE', 'SUSPICIOUS_DATE'}
 
 
@@ -76,7 +77,8 @@ def user_dto(user):
     memberships = client_ids(g.db, user)
     return {'id': user.id, 'email': user.email, 'display_name': user.display_name,
             'account_status': user.account_status, 'roles': sorted(roles(g.db, user)),
-            'requested_role': {'PENDING_ADMIN': 'SYSTEM_ADMIN', 'PENDING_REVIEWER': 'FINANCE_REVIEWER'}.get(user.account_status),
+            'requested_role': {'PENDING_ADMIN': 'SYSTEM_ADMIN', 'PENDING_REVIEWER': 'FINANCE_REVIEWER', 'PENDING_COMPANY': 'COMPANY_CLIENT'}.get(user.account_status),
+            'requested_company_name': (record.value if (record := g.db.get(Setting, 'company_request:'+user.id)) else None),
             'clients': [{'id': c.id, 'name': c.name} for c in g.db.scalars(select(Client).where(Client.id.in_(memberships)).order_by(Client.name))]}
 
 
@@ -84,7 +86,8 @@ def session_dto(user, expires_at):
     data = user_dto(user)
     portal = 'pending' if user.account_status != 'ACTIVE' else (
         'admin' if set(data['roles']) & {'SYSTEM_ADMIN', 'SERVICE_LEAD'} else
-        'reviewer' if 'FINANCE_REVIEWER' in data['roles'] else 'client')
+        'reviewer' if 'FINANCE_REVIEWER' in data['roles'] else
+        'client' if 'COMPANY_CLIENT' in data['roles'] else 'uploader' if set(data['roles']) & CLIENT_ROLES else 'pending')
     return {'user': data, 'portal': portal, 'csrf_token': session['csrf'], 'expires_at': expires_at}
 
 
@@ -129,13 +132,30 @@ def create_client_workspace(user):
 
 
 def request_role(user, requested_role):
+    # Registration/login can activate a reviewer request, but never undo a
+    # suspension or add the role to an existing client/admin account.
+    if user.account_status == 'PENDING_REVIEWER' and requested_role in (None, 'FINANCE_REVIEWER'):
+        assigned = roles(g.db, user)
+        if assigned - {'FINANCE_REVIEWER'}:
+            fail(403, 'ROLE_CONFLICT', 'Peran akun perlu diperiksa pengelola.')
+        if 'FINANCE_REVIEWER' not in assigned:
+            g.db.add(Role(user_id=user.id, role='FINANCE_REVIEWER'))
+        user.account_status = 'ACTIVE'
+        audit(g.db, 'REVIEWER_SELF_REGISTERED', actor_id=user.id,
+              reason='Reviewer registration activates without admin approval')
+        return
     if not requested_role:
         return
+    if user.account_status == 'PENDING_COMPANY':
+        fail(403, 'ROLE_NOT_GRANTED', 'Akun Klien perusahaan menunggu pengaitan perusahaan oleh admin. Masuk dengan email biasa.')
     if user.account_status != 'ACTIVE':
+        if requested_role == 'CLIENT_OWNER':
+            fail(403, 'ROLE_NOT_GRANTED', 'Peran Uploader belum diberikan pada akun ini.')
         user.account_status = pending_status(requested_role)
         return
     assigned = roles(g.db, user)
-    permitted = {'FINANCE_REVIEWER', 'SERVICE_LEAD'} if requested_role == 'FINANCE_REVIEWER' else {'SYSTEM_ADMIN'}
+    permitted = {'FINANCE_REVIEWER': {'FINANCE_REVIEWER', 'SERVICE_LEAD'},
+                 'CLIENT_OWNER': CLIENT_ROLES, 'SYSTEM_ADMIN': {'SYSTEM_ADMIN'}}[requested_role]
     if not assigned & permitted:
         fail(403, 'ROLE_NOT_GRANTED', 'Akses yang diminta belum diberikan. Masuk dengan email biasa dan hubungi pengelola untuk perubahan peran.')
 
@@ -145,7 +165,7 @@ def request_access():
     if actor_roles & {'SYSTEM_ADMIN', 'SERVICE_LEAD'}:
         return true()
     permitted = [false()]
-    if actor_roles & CLIENT_ROLES:
+    if actor_roles & (CLIENT_ROLES | COMPANY_ROLES):
         permitted.append(WorkRequest.client_id.in_(client_ids(g.db, g.actor)))
     if 'FINANCE_REVIEWER' in actor_roles:
         permitted.append(WorkRequest.pic_id == g.actor.id)
@@ -154,6 +174,10 @@ def request_access():
 
 
 def scoped_request(request_id, lock=False):
+    from .models import RequestNumber
+    if isinstance(request_id,str) and request_id.upper().startswith('REQ-'):
+        alias=g.db.scalar(select(RequestNumber.request_id).where(RequestNumber.code==request_id.upper()))
+        request_id=alias or request_id
     query = select(WorkRequest).where(WorkRequest.id == request_id, request_access())
     if lock:
         query = query.with_for_update()
@@ -218,9 +242,12 @@ def validation_for(req, inv):
     def flag(code, message):
         extra.append({'code': code, 'severity': 'BLOCK', 'message': message, 'resolved': False})
     doc = source_document(g.db,req)
+    from .models import RequestIntake
+    intake=g.db.get(RequestIntake,req.id)
+    same_source=select(RequestIntake.request_id).where(RequestIntake.source_group==intake.source_group) if intake else select(RequestIntake.request_id).where(false())
     duplicate = g.db.scalar(select(Document.id).join(WorkRequest, Document.request_id == WorkRequest.id).where(
         WorkRequest.client_id == req.client_id, Document.type == 'INVOICE', Document.sha256 == doc.sha256,
-        Document.request_id != req.id).limit(1))
+        Document.request_id != req.id,Document.request_id.not_in(same_source)).limit(1))
     if duplicate:
         flag('DUPLICATE_FILE', 'Berkas identik sudah ada di klien ini; reviewer wajib memeriksa alasan pengulangan.')
     if fields['vendor_name'] and fields['invoice_number']:
@@ -234,18 +261,24 @@ def validation_for(req, inv):
     documents = {d.id: d for d in g.db.scalars(select(Document).where(Document.request_id == req.id))}
     source = sources_for(g.db, inv).get('account_number')
     if not fields['account_number'] or not source or source['document_id'] not in documents:
-        flag('MISSING_EVIDENCE', 'Rekening belum lengkap atau belum memiliki sumber. Lengkapi rekening dari invoice atau bukti pendukung.')
+        flag('MISSING_EVIDENCE', 'Rekening belum lengkap atau belum memiliki catatan asal. Lengkapi dari dokumen atau hasil pemeriksaan reviewer.')
     if not source or source['document_id'] not in documents:
-        flag('ACCOUNT_SOURCE_REQUIRED', 'Nomor rekening harus memiliki sumber dokumen yang dapat diperiksa.')
+        flag('ACCOUNT_SOURCE_REQUIRED', 'Catat asal rekening dari dokumen atau hasil pemeriksaan reviewer.')
     head = g.db.get(InvoiceVersion, (inv.id, inv.current_version))
     resolutions = {r.issue_code: {'actor_id': r.actor_id, 'reason': r.reason, 'at': r.created_at}
                    for r in g.db.scalars(select(Resolution).where(Resolution.invoice_id == inv.id, Resolution.version == inv.current_version))}
     confirmed=confirmation_dto(g.db,req,inv)
+    from .models import InvoiceTaxPlan
+    tax_plan=g.db.get(InvoiceTaxPlan,(inv.id,inv.current_version))
+    source_pph=tax_plan.source_withholding if tax_plan and tax_plan.revision>0 else '0'
     return validate(fields, inv.current_version, confirmed['item_count'] if confirmed['confirmed'] else head.expected_item_count, extra, resolutions,
-                    current_app.config['IDR_TOLERANCE'] if fields['currency'] == 'IDR' else current_app.config['DEFAULT_TOLERANCE'])
+                    current_app.config['IDR_TOLERANCE'] if fields['currency'] == 'IDR' else current_app.config['DEFAULT_TOLERANCE'],source_withholding=source_pph)
 
 
 def invoice_dto(req, inv, *, request_state=None,review_ready=None):
+    from .manual_pdf import latest_manual,manual_dto
+    from .voucher_tax import plan_dto
+    manual=latest_manual(g.db,inv)
     rev = latest_review(g.db, inv)
     approved = bool(rev and rev.decision == 'APPROVED')
     confirmation=confirmation_dto(g.db,req,inv)
@@ -268,7 +301,9 @@ def invoice_dto(req, inv, *, request_state=None,review_ready=None):
             'review_note': rev.reason if rev else None,
             'reviewer_id': rev.actor_id if rev else None, 'reviewed_at': rev.created_at if rev else None,
             'initial_analysis':assistance_dto(g.db,req,inv),
-            'uploader_confirmation':confirmation,
+            'uploader_confirmation':confirmation, 'manual_review_pdf':manual_dto(manual),
+            'voucher_pdf_source':rev.validation_snapshot.get('voucher_pdf_source') if approved else None,
+            'voucher_tax':plan_dto(g.db,inv,fields_for(g.db,inv)),
             'allowed_actions': actions}
 
 
@@ -299,7 +334,7 @@ def request_dto(req, detail=False):
             totals[f['currency']] = totals.get(f['currency'], Decimal(0)) + Decimal(f['total_amount'])
     pic = g.db.get(User, req.pic_id) if req.pic_id else None
     data = {'id': req.id, 'client_id': req.client_id, 'client_name': g.db.get(Client, req.client_id).name,
-            'pic_name': pic.display_name if pic else None,
+            'pic_name': pic.display_name if pic else None, 'uploader_name': g.db.get(User,req.uploaded_by).display_name,
             'uploaded_by': req.uploaded_by, 'pic_id': req.pic_id, 'request_type': req.request_type,
             'status': status, 'request_date': req.request_date, 'deadline': req.deadline,
             'channel': req.channel, 'updated_at': req.updated_at, 'invoice_count': len(invs),
@@ -307,6 +342,12 @@ def request_dto(req, detail=False):
             'invoice_numbers': [row['fields']['invoice_number'] for row in invoice_rows if row['fields']['invoice_number']],
             'totals_by_currency': [{'currency': currency, 'amount': format(total, 'f')} for currency, total in sorted(totals.items())],
             'issues': [issue for row in invoice_rows for issue in row['validation']['issues']]}
+    from .models import RequestNumber,CompanyNumber
+    number=g.db.get(RequestNumber,req.id)
+    company_number=g.db.get(CompanyNumber,req.client_id)
+    data['request_code']=number.code if number else req.id
+    data['company_number']=company_number.number if company_number else None
+    data['request_sequence']=number.sequence if number else None
     data['lifecycle'] = state
     data['work_status'] = progress(req, status, invoice_rows, state['state'])
     data['voucher_count'] = sum(row['review_status'] == 'APPROVED' for row in invoice_rows)
@@ -322,9 +363,9 @@ def request_dto(req, detail=False):
         data['allowed_actions'] = (['ADD_EVIDENCE'] if editable(req) and idle and not approved_any else []) + (
             ['REEXTRACT'] if editable(req) and idle and not approved_any else [])
         actor_roles = roles(g.db, g.actor)
-        is_client = bool(actor_roles & CLIENT_ROLES) and req.client_id in client_ids(g.db, g.actor) and 'SYSTEM_ADMIN' not in actor_roles
+        is_client = bool(actor_roles & COMPANY_ROLES) and req.client_id in client_ids(g.db, g.actor) and 'SYSTEM_ADMIN' not in actor_roles
         data['allowed_actions'] += client_actions(is_client, status, state['state'])
-        if req.uploaded_by==g.actor.id and is_client and idle:data['allowed_actions'].append('UPLOAD_REVISION')
+        if req.uploaded_by==g.actor.id and bool(actor_roles & CLIENT_ROLES) and idle:data['allowed_actions'].append('UPLOAD_REVISION')
         event = g.db.scalar(select(Audit).where(Audit.request_id == req.id,
             Audit.action == 'CLIENT_REVISION_REQUESTED').order_by(Audit.at.desc(), Audit.id.desc()).limit(1))
         data['client_revision_note'] = event.reason if event else None
@@ -332,10 +373,13 @@ def request_dto(req, detail=False):
                               'stage_step': 3 if req.processing_status == 'COMPLETE' else 1 if req.processing_status == 'PROCESSING' else 0,
                               'stage_total': 3, 'error_code': req.error_code,
                               'error_message': req.stage if req.error_code else None}
-        from .models import TelegramLink
-        link=g.db.get(TelegramLink,req.uploaded_by)
-        data['telegram']={'available':bool(link and current_app.config['TELEGRAM_BOT_TOKEN']),
-                          'recipient_name':g.db.get(User,req.uploaded_by).display_name}
+        from .telegram_config import company_recipients,bot_dto
+        recipients=company_recipients(g.db,req.client_id,current_app.config)
+        data['telegram']={'available':bool(any(r['connected'] for r in recipients) and bot_dto(current_app.config)['configured']),
+                          'recipient_name':recipients[0]['name'] if len(recipients)==1 else None,'recipients':recipients}
+        if is_client:
+            from .telegram_automatic import automatic_receipts
+            data['telegram']['automatic']=automatic_receipts(g.db,req,g.actor.id,current_app.config)
     return data
 
 
@@ -450,6 +494,24 @@ def decide(request_id, invoice_id, decision):
     why = reason(data) if decision == 'REJECTED' else None
     if decision == 'APPROVED' and not validation['valid']:
         fail(422, 'VALIDATION_BLOCKED', 'Selesaikan seluruh validasi BLOCK sebelum approval.')
+    from .voucher_tax import applied_tax
+    from .manual_pdf import latest_manual
+    tax=applied_tax(g.db,inv,fields_for(g.db,inv))
+    manual=latest_manual(g.db,inv)
+    pdf_source=data.get('voucher_pdf_source','MANUAL' if manual else 'GENERATED')
+    if decision=='APPROVED':
+        if pdf_source not in ('MANUAL','GENERATED'):
+            fail(422,'INVALID_VOUCHER_SOURCE','Pilih PDF manual atau voucher otomatis dari data tersimpan.')
+        if pdf_source=='MANUAL' and not manual:
+            fail(409,'MANUAL_PDF_CHANGED','PDF manual belum tersedia pada versi ini. Muat ulang.')
+    if decision=='APPROVED' and tax:
+        if type(data.get('expected_tax_revision')) is not int or data['expected_tax_revision']!=tax['revision']:
+            fail(409,'TAX_CHANGED','Pajak voucher berubah. Muat ulang dan periksa nilai akhir sebelum menyetujui.')
+        if pdf_source=='MANUAL' and manual and tax['edited_at'] and manual.created_at<tax['edited_at']:
+            fail(409,'MANUAL_TAX_STALE','Pajak berubah setelah PDF final diunggah. Pilih voucher otomatis dari data terbaru atau unggah PDF final yang disesuaikan.')
+        validation={**validation,'voucher_tax':tax}
+    if decision=='APPROVED':
+        validation={**validation,'voucher_pdf_source':pdf_source,'manual_pdf_id':manual.id if pdf_source=='MANUAL' else None}
     review = Review(id=uid('rev'), invoice_id=inv.id, version=inv.current_version, decision=decision,
                     actor_id=g.actor.id, created_at=now(), reason=why, validation_snapshot=validation)
     g.db.add(review)
@@ -458,9 +520,13 @@ def decide(request_id, invoice_id, decision):
         voucher_id = uid('vch')
         pdf = render_voucher(fields_for(g.db, inv), voucher_id, inv.current_version,
                              g.actor.display_name, review.created_at,
-                             requester_name=g.db.get(User, req.uploaded_by).display_name, purpose=req.request_type)
-        g.db.add(Voucher(id=voucher_id, invoice_id=inv.id, version=inv.current_version, review_id=review.id,
-                         pdf=pdf, sha256=sha256(pdf).hexdigest(), created_at=now()))
+                             requester_name=g.db.get(User, req.uploaded_by).display_name, purpose=req.request_type,tax=tax)
+        if pdf_source=='MANUAL':pdf=bytes(manual.pdf)
+        voucher=Voucher(id=voucher_id, invoice_id=inv.id, version=inv.current_version, review_id=review.id,
+                         pdf=pdf, sha256=sha256(pdf).hexdigest(), created_at=now())
+        g.db.add(voucher)
+        from .telegram_automatic import enqueue_automatic
+        enqueue_automatic(g.db,req,inv,voucher,g.actor.id,current_app.config)
     req.updated_at = now()
     audit(g.db, 'INVOICE_' + decision, g.actor.id, req.id, inv.id, why)
     g.db.flush()

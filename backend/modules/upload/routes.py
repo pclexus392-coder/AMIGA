@@ -11,12 +11,12 @@ from ...api_common import (
     datetime, decide, document_dto, editable, fail, fields_for,
     g, independent, invoice_dto, invoices, latest_review, lifecycle,
     mutation_invoice, normalize, now, ok, previous_analysis, read_upload,
-    reason, release_inactive_pic, render_voucher, request, request_access, request_dto,
+    reason, release_inactive_pic, render_voucher, request, request_access, request_dto, reviewer,
     require_open, require_review, require_role, require_task_staff, roles, save_upload,
     scoped_invoice, scoped_request, select, send_file, sources_for, task_complete,
     timedelta, timezone, uid, update, validation_for, write_version
 )
-from ...workflow import ready_for_review,invalidate_assistance,source_document,input_hash,assistance_dto
+from ...workflow import ready_for_review,invalidate_assistance,source_document,input_hash,assistance_dto,confirmation_dto
 from ...models import UploaderConfirmation,InvoiceAssistance,RequestSource,Invoice
 
 
@@ -38,7 +38,7 @@ def list_requests():
     search = request.args.get('search', '').strip().casefold()
     statuses = set(filter(None, request.args.get('status', '').split(',')))
     if search:
-        rows = [r for r in rows if search in ' '.join([r['id'], r['client_name']] + r['vendor_names'] + r['invoice_numbers']).casefold()]
+        rows = [r for r in rows if search in ' '.join([r['id'], r.get('request_code',''), r['client_name']] + r['vendor_names'] + r['invoice_numbers']).casefold()]
     if statuses:
         rows = [r for r in rows if r['status'] in statuses]
     if request.args.get('lifecycle'):
@@ -191,8 +191,7 @@ def review_analysis(request_id, invoice_id):
 
 
 
-@api.post('/requests')
-def upload():
+def upload_metadata():
     if not roles(g.db, g.actor) & (CLIENT_ROLES | {'FINANCE_REVIEWER'}) or 'SYSTEM_ADMIN' in roles(g.db, g.actor):
         fail(403, 'FORBIDDEN', 'Akun tidak berwenang mengunggah invoice.')
     values = {key: request.form.get(key, '').strip() for key in ('client_id', 'request_type', 'channel', 'request_date', 'deadline')}
@@ -205,6 +204,12 @@ def upload():
             raise ValueError()
     except ValueError:
         fail(422, 'INVALID_DATE', 'Tanggal harus YYYY-MM-DD dan tenggat tidak boleh mendahului tanggal request.')
+    return values
+
+
+@api.post('/requests')
+def upload():
+    values = upload_metadata()
     evidence = [f for f in request.files.getlist('evidence_files[]') if f.filename]
     if len(evidence) > 10:
         fail(422, 'FILE_LIMIT', 'Maksimal 10 berkas bukti.')
@@ -214,6 +219,8 @@ def upload():
                       processing_status='QUEUED', stage='Menunggu ekstraksi', **values)
     g.db.add(req)
     g.db.flush()
+    from ...request_numbers import assign_request_number
+    assign_request_number(g.db,req)
     source=save_upload(req, invoice_checked, 'INVOICE')
     g.db.add(RequestSource(request_id=req.id,document_id=source.id,revision=1))
     for checked in evidence_checked:
@@ -384,6 +391,10 @@ def process(request_id):
 def edit_invoice(request_id, invoice_id):
     data = body()
     req, inv = mutation_invoice(request_id, invoice_id, data)
+    return ok(save_invoice_draft(req,inv,data))
+
+
+def save_invoice_draft(req,inv,data):
     if not editable(req):
         fail(403, 'FORBIDDEN', 'Akun tidak dapat mengubah invoice.')
     why = reason(data)
@@ -396,6 +407,11 @@ def edit_invoice(request_id, invoice_id):
     if not isinstance(sources, dict) or len(sources) > 100:
         fail(422, 'INVALID_SOURCE', 'Sumber field harus objek.')
     previous_sources = sources_for(g.db, inv)
+    review_edit = reviewer(req)
+    invoice_doc = source_document(g.db,req)
+    # document_id scopes this annotation to the invoice being reviewed; REVIEWER
+    # expressly means a human addition, not evidence extracted from that PDF.
+    review_source = {'document_id': invoice_doc.id, 'source_type': 'REVIEWER', 'page': None, 'notes': why}
     docs = {d.id: d for d in g.db.scalars(select(Document).where(Document.request_id == req.id))}
     cleaned = {}
     for field, source in sources.items():
@@ -411,32 +427,53 @@ def edit_invoice(request_id, invoice_id):
             fail(422, 'INVALID_SOURCE', 'document_id sumber harus string.')
         doc = docs.get(source_id)
         kind, page, notes = source.get('source_type'), source.get('page'), source.get('notes')
-        if not doc or kind not in ('EXTRACTED', 'MANUAL', 'EVIDENCE') or (kind == 'EVIDENCE' and doc.type != 'EVIDENCE'):
+        if not doc or kind not in ('EXTRACTED', 'MANUAL', 'EVIDENCE', 'REVIEWER') or (kind == 'EVIDENCE' and doc.type != 'EVIDENCE'):
             fail(422, 'INVALID_SOURCE', 'Sumber harus dokumen milik request ini.')
         if page is not None and (type(page) is not int or not 1 <= page <= doc.page_count):
             fail(422, 'INVALID_SOURCE', 'Nomor halaman sumber tidak valid.')
         if notes is not None and (not isinstance(notes, str) or len(notes) > 2000):
             fail(422, 'INVALID_SOURCE', 'Catatan sumber tidak valid.')
         canonical_source = {'document_id': doc.id, 'source_type': kind, 'page': page, 'notes': notes}
+        if kind == 'REVIEWER':
+            if review_edit:
+                if doc.id != invoice_doc.id:
+                    fail(422, 'INVALID_SOURCE', 'Tambahan reviewer harus terkait invoice yang sedang diperiksa.')
+                # Preserve unchanged provenance on a no-op save.
+                if canonical_source != previous_sources.get(field) or fields[field] != previous[field]:
+                    canonical_source = dict(review_source)
+            elif canonical_source != previous_sources.get(field) or fields[field] != previous[field]:
+                fail(403, 'REVIEWER_SOURCE_REQUIRED', 'Tambahan hasil review hanya dapat dicatat reviewer yang menangani tugas.')
         if kind == 'EXTRACTED':
             if canonical_source != previous_sources.get(field):
                 fail(422, 'INVALID_SOURCE', 'Sumber EXTRACTED hanya dapat dipertahankan dari hasil sebelumnya.')
             if fields[field] != previous[field]:
-                canonical_source = {**canonical_source, 'source_type': 'MANUAL', 'notes': why}
+                canonical_source = dict(review_source) if review_edit else {**canonical_source, 'source_type': 'MANUAL', 'notes': why}
         cleaned[field] = canonical_source
-    invoice_doc = source_document(g.db,req)
     for field in HEADER_FIELDS:
-        if fields[field] != previous[field] and field not in cleaned:
+        if review_edit and fields[field] != previous[field] and (not cleaned.get(field) or cleaned[field]['source_type'] != 'EVIDENCE'):
+            cleaned[field] = dict(review_source)
+        elif fields[field] != previous[field] and field not in cleaned:
             cleaned[field] = {'document_id': invoice_doc.id, 'source_type': 'MANUAL', 'page': None, 'notes': why}
         elif field not in cleaned and field in previous_sources:
             cleaned[field] = previous_sources[field]
     bank_changed = any(fields[k] != previous[k] for k in ('account_number', 'bank_name', 'account_holder'))
-    if bank_changed and (not cleaned.get('account_number') or cleaned['account_number']['source_type'] != 'EVIDENCE'):
+    if review_edit and fields['account_number'] and (bank_changed or not cleaned.get('account_number')):
+        if not cleaned.get('account_number') or cleaned['account_number']['source_type'] != 'EVIDENCE':
+            cleaned['account_number'] = dict(review_source)
+    if bank_changed and not review_edit and (not cleaned.get('account_number') or cleaned['account_number']['source_type'] != 'EVIDENCE'):
         fail(422, 'BANK_EVIDENCE_REQUIRED', 'Perubahan rekening harus merujuk bukti pendukung.')
     if type(data.get('item_count_confirmed', False)) is not bool:
         fail(422, 'INVALID_CONFIRMATION', 'Konfirmasi item harus boolean.')
     previous_version = inv.current_version
     previous_count = g.db.get(InvoiceVersion, (inv.id, previous_version)).expected_item_count
+    confirmed_count = len(fields['line_items']) if data.get('item_count_confirmed') else None
+    confirmation = confirmation_dto(g.db, req, inv)
+    effective_count = confirmation['item_count'] if confirmation['confirmed'] else previous_count
+    # A save of identical persisted content is not a revision. In particular,
+    # retaining the uploader's already-verified item count must not revoke it.
+    if (fields == previous and {k: v for k, v in cleaned.items() if v} == previous_sources
+            and confirmed_count == effective_count):
+        return {**invoice_dto(req, inv), 'revision_created': False}
     inv.current_version += 1
     write_version(g.db, inv, fields, cleaned, g.actor.id, why,
                   len(fields['line_items']) if data.get('item_count_confirmed') else None)
@@ -446,11 +483,10 @@ def edit_invoice(request_id, invoice_id):
     changes += [{'field': 'version', 'before': previous_version, 'after': inv.current_version}]
     if previous_sources != sources_for(g.db, inv):
         changes.append({'field': 'field_sources', 'before': previous_sources, 'after': sources_for(g.db, inv)})
-    confirmed_count = len(fields['line_items']) if data.get('item_count_confirmed') else None
     if previous_count != confirmed_count:
         changes.append({'field': 'expected_item_count', 'before': previous_count, 'after': confirmed_count})
     audit(g.db, 'INVOICE_REVISED', g.actor.id, req.id, inv.id, why, changes)
-    return ok(invoice_dto(req, inv))
+    return {**invoice_dto(req, inv), 'revision_created': True}
 
 
 
@@ -511,8 +547,9 @@ def voucher_preview(request_id, invoice_id):
     if not fields:
         fail(404, 'NOT_FOUND', 'Versi invoice tidak ditemukan.')
     voucher = g.db.scalar(select(Voucher).where(Voucher.invoice_id == inv.id, Voucher.version == version))
+    from ...voucher_tax import applied_tax
     pdf = voucher.pdf if voucher else render_voucher(fields, 'DRAFT-' + inv.id, version,
-        requester_name=g.db.get(User, req.uploaded_by).display_name, purpose=req.request_type)
+        requester_name=g.db.get(User, req.uploaded_by).display_name, purpose=req.request_type,tax=applied_tax(g.db,inv,fields,version))
     return send_file(BytesIO(pdf), mimetype='application/pdf', download_name='voucher-preview.pdf', conditional=False)
 
 
@@ -524,7 +561,7 @@ def voucher_download(request_id, invoice_id):
     voucher = g.db.scalar(select(Voucher).where(Voucher.invoice_id == inv.id, Voucher.version == inv.current_version))
     if not review or review.decision != 'APPROVED' or not voucher:
         fail(403, 'APPROVAL_REQUIRED', 'Voucher resmi hanya tersedia setelah approval independen.')
-    client_download = bool(roles(g.db, g.actor) & CLIENT_ROLES) and req.client_id in client_ids(g.db, g.actor)
+    client_download = 'COMPANY_CLIENT' in roles(g.db, g.actor) and req.client_id in client_ids(g.db, g.actor)
     if client_download:
         g.db.add(Handover(id=uid('hnd'), voucher_id=voucher.id, actor_id=g.actor.id, created_at=now()))
     audit(g.db, 'VOUCHER_DOWNLOAD_PROVIDED', g.actor.id, req.id, inv.id,
@@ -549,7 +586,7 @@ def change_lifecycle(request_id):
     data = body()
     req = scoped_request(request_id, True)
     actor_roles = roles(g.db, g.actor)
-    if ('SYSTEM_ADMIN' in actor_roles or not actor_roles & CLIENT_ROLES
+    if ('SYSTEM_ADMIN' in actor_roles or 'COMPANY_CLIENT' not in actor_roles
             or req.client_id not in client_ids(g.db, g.actor)):
         fail(403, 'CLIENT_REQUIRED', 'Penerimaan layanan dan permintaan revisi dilakukan klien terkait.')
     current = request_dto(req, True)

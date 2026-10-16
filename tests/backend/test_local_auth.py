@@ -43,7 +43,7 @@ class LocalAuthTests(unittest.TestCase):
         token = client.get('/api/auth/csrf').json['data']['csrf_token']
         return client.post(path, json=data, headers={'X-CSRF-Token': token})
 
-    def login(self, email='first.owner@example.test/atmin', password=PASSWORD, client=None):
+    def login(self, email='first.owner@example.test/admin', password=PASSWORD, client=None):
         return self.post('/api/auth/login', {'email_input': email, 'password': password}, client)
 
     def setup_owner(self):
@@ -71,7 +71,7 @@ class LocalAuthTests(unittest.TestCase):
         self.assertEqual(self.post('/api/auth/google', {}).status_code, 503)
 
     def test_registration_hashes_password_and_suffix_never_grants_admin(self):
-        response = self.post('/api/auth/register', {'email_input':'New.User+amiga@example.test /atmin', 'password':PASSWORD, 'display_name':'New User'})
+        response = self.post('/api/auth/register', {'email_input':'New.User+amiga@example.test /admin', 'password':PASSWORD, 'display_name':'New User'})
         self.assertEqual(response.status_code, 201, response.json)
         data = response.json['data']
         self.assertEqual(data['user']['email'], 'new.user+amiga@example.test')
@@ -87,26 +87,34 @@ class LocalAuthTests(unittest.TestCase):
             self.assertEqual(db.get(Setting, 'bootstrap_consumed').value, '0')
             self.assertNotIn(PASSWORD, repr(list(db.scalars(select(Audit.changes)))))
 
-    def test_normal_registration_creates_private_client_workspace_without_staff_roles(self):
-        first=self.post('/api/auth/register',{'email_input':'normal@example.test','password':PASSWORD,'display_name':'Normal Client','roles':['SYSTEM_ADMIN'],'client_ids':['A']})
+    def test_uploder_registration_creates_private_workspace_and_alias_preserves_identity(self):
+        first=self.post('/api/auth/register',{'email_input':' Normal+demo@Example.test /UPLODER ','password':PASSWORD,'display_name':'Normal Uploader','roles':['SYSTEM_ADMIN'],'client_ids':['A']})
         self.assertEqual(first.status_code,201,first.json)
         data=first.json['data']
-        self.assertEqual(data['portal'],'client')
+        self.assertEqual(data['portal'],'uploader')
         self.assertEqual(data['user']['roles'],['CLIENT_OWNER'])
         self.assertEqual(data['user']['account_status'],'ACTIVE')
+        self.assertEqual(data['user']['email'],'normal+demo@example.test')
         self.assertEqual(len(data['user']['clients']),1)
         other=self.app.test_client()
-        second=self.post('/api/auth/register',{'email_input':'second@example.test','password':PASSWORD},other).json['data']
+        second=self.post('/api/auth/register',{'email_input':'second@example.test/uploader','password':PASSWORD},other).json['data']
         self.assertNotEqual(data['user']['clients'][0]['id'],second['user']['clients'][0]['id'])
         self.assertEqual(self.client.get('/api/admin/users').status_code,403)
         self.assertEqual(self.client.get('/api/requests').status_code,200)
-        self.assertEqual(self.login(email='normal@example.test/view').status_code,403)
-        self.assertEqual(self.login(email='normal@example.test').json['data']['portal'],'client')
+        self.assertEqual(self.login(email='normal+demo@example.test/view').status_code,403)
+        for suffix in ('','/uploder','/uploader'):
+            self.assertEqual(self.login(email='normal+demo@example.test'+suffix).json['data']['portal'],'uploader')
+        with self.db.begin() as db:
+            db.get(User,data['user']['id']).account_status='DISABLED'
+        for suffix in ('','/uploder','/uploader'):
+            denied=self.login(email='normal+demo@example.test'+suffix)
+            self.assertEqual(denied.status_code,403)
+            self.assertEqual(denied.json['error']['code'],'ACCOUNT_DISABLED')
 
-    def test_view_requires_one_admin_approval_without_client_assignment(self):
+    def test_view_activates_without_admin_approval(self):
         self.assert_reviewer_activation('/VIEW')
 
-    def test_review_requires_one_admin_approval_without_client_assignment(self):
+    def test_review_activates_without_admin_approval(self):
         self.assert_reviewer_activation('/ReViEw')
 
     def assert_reviewer_activation(self, suffix):
@@ -114,32 +122,97 @@ class LocalAuthTests(unittest.TestCase):
         self.assertEqual(response.status_code,201,response.json)
         user=response.json['data']['user']
         self.assertEqual(user['email'],'reviewer.test+amiga@example.test')
-        self.assertEqual(user['account_status'],'PENDING_REVIEWER')
-        self.assertEqual(user['requested_role'],'FINANCE_REVIEWER')
-        self.assertEqual(user['roles'],[])
-        self.assertEqual(self.client.get('/api/requests').status_code,403)
+        self.assertEqual(user['account_status'],'ACTIVE')
+        self.assertIsNone(user['requested_role'])
+        self.assertEqual(user['roles'],['FINANCE_REVIEWER'])
+        self.assertEqual(user['clients'],[])
+        self.assertEqual(response.json['data']['portal'],'reviewer')
+        self.assertEqual(self.client.get('/api/tasks').status_code,200)
+        self.assertEqual(self.client.get('/api/admin/users').status_code,403)
+        self.assertEqual(self.login(email=user['email']).json['data']['portal'],'reviewer')
         self.setup_owner()
         admin=self.app.test_client()
         self.assertEqual(self.login(client=admin).status_code,200)
-        with self.db.begin() as db:
-            db.add(Client(id='A',name='Klien A'))
         csrf=admin.get('/api/auth/csrf').json['data']['csrf_token']
-        activated=admin.patch('/api/admin/users/'+user['id'],json={'account_status':'ACTIVE','roles':['FINANCE_REVIEWER'],'client_ids':[]},headers={'X-CSRF-Token':csrf})
+        endpoint='/api/admin/users/'+user['id']
+        disabled=admin.patch(endpoint,json={'account_status':'DISABLED'},headers={'X-CSRF-Token':csrf})
+        self.assertEqual(disabled.status_code,200,disabled.json)
+        self.assertEqual(self.client.get('/api/tasks').status_code,401)
+        for ending in ('','/view','/review'):
+            denied=self.login(email=user['email']+ending)
+            self.assertEqual(denied.status_code,403)
+            self.assertEqual(denied.json['error']['code'],'ACCOUNT_DISABLED')
+        activated=admin.patch(endpoint,json={'account_status':'ACTIVE'},headers={'X-CSRF-Token':csrf})
         self.assertEqual(activated.status_code,200,activated.json)
-        self.assertEqual(self.client.get('/api/auth/me').status_code,401)
         self.assertEqual(self.login(email=user['email']).json['data']['portal'],'reviewer')
-        self.assertEqual(self.client.get('/api/tasks').status_code,200)
-        self.assertEqual(self.login(email=user['email']+'/view').json['data']['user']['roles'],['FINANCE_REVIEWER'])
-        self.assertEqual(self.login(email=user['email']+'/review').json['data']['user']['roles'],['FINANCE_REVIEWER'])
+
+    def test_optional_telegram_contact_saved_on_company_registration_without_access(self):
+        response=self.post('/api/auth/register',{'email_input':'recipient@example.test','password':PASSWORD,'company_name':'PT Contoh','telegram_contact':'@Recipient_Demo'})
+        self.assertEqual(response.status_code,201,response.json)
+        self.assertEqual(response.json['data']['portal'],'pending')
+        self.assertEqual(response.json['data']['user']['requested_role'],'COMPANY_CLIENT')
+        self.assertEqual(response.json['data']['user']['requested_company_name'],'PT Contoh')
+        self.assertEqual(response.json['data']['user']['clients'],[])
+        self.assertEqual(self.client.get('/api/telegram/status').status_code,403)
+        self.assertEqual(self.login(email='recipient@example.test').json['data']['portal'],'pending')
+        for suffix in ('/uploder','/uploader','/review'):
+            self.assertEqual(self.login(email='recipient@example.test'+suffix).status_code,403)
+        from backend.telegram_config import preference
+        with self.db() as db:
+            self.assertEqual(preference(db,'contact',response.json['data']['user']['id']),'@recipient_demo')
+            self.assertEqual(db.get(User,response.json['data']['user']['id']).account_status,'PENDING_COMPANY')
+            self.assertEqual(db.scalar(select(func.count()).select_from(Client)),0)
+
+    def test_registration_cannot_override_email_suffix_or_skip_company_name(self):
+        for payload in (
+            {'email_input':'plain@example.test'},
+            {'email_input':'plain@example.test','company_name':'PT Contoh','account_type':'uploader'},
+            {'email_input':'upload@example.test/uploder','company_name':'PT Contoh','account_type':'company_client'},
+            {'email_input':'upload@example.test/uploader','telegram_contact':'@recipient_demo'},
+        ):
+            response=self.post('/api/auth/register',dict(payload,password=PASSWORD))
+            self.assertEqual(response.status_code,422,response.json)
+        with self.db() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(User)),0)
+
+    def test_suffix_cannot_turn_existing_company_or_reviewer_into_uploader(self):
+        self.post('/api/auth/register',{'email_input':'company@example.test','password':PASSWORD,'company_name':'PT Demo'})
+        with self.db.begin() as db:
+            user=db.scalar(select(User).where(User.email=='company@example.test'))
+            user.account_status='ACTIVE'
+            db.add(Role(user_id=user.id,role='COMPANY_CLIENT'))
+        self.assertEqual(self.login(email='company@example.test/uploder').status_code,403)
+        self.assertEqual(self.login(email='company@example.test').json['data']['portal'],'client')
+        self.post('/api/auth/register',{'email_input':'reviewer@example.test/review','password':PASSWORD})
+        self.assertEqual(self.login(email='reviewer@example.test/uploder').status_code,403)
+        self.assertEqual(self.login(email='reviewer@example.test').json['data']['portal'],'reviewer')
+
+    def test_telegram_contact_does_not_make_staff_recipient_and_invalid_registration_rolls_back(self):
+        for email,contact in [('invalid@example.test','+628123456789'),('staff@example.test/review','@staff_recipient')]:
+            response=self.post('/api/auth/register',{'email_input':email,'password':PASSWORD,'telegram_contact':contact})
+            self.assertEqual(response.status_code,422,response.json)
+        with self.db() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(User)),0)
+
+    def test_existing_pending_reviewer_activates_on_plain_login(self):
+        with self.db.begin() as db:
+            db.add(User(id='legacy',email='legacy@example.test',display_name='Legacy',account_status='PENDING_REVIEWER'))
+            db.flush()
+            db.add(LocalCredential(user_id='legacy',password_hash=self.encoded))
+        response=self.login(email='legacy@example.test')
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['data']['portal'],'reviewer')
+        self.assertEqual(response.json['data']['user']['roles'],['FINANCE_REVIEWER'])
 
     def test_unknown_or_stacked_suffix_is_rejected_before_account_creation(self):
-        for email in ['new@example.test/admin','new@example.test/atmin/view','new@example.test/view/atmin',
-                      'new@example.test/review/atmin','new@example.test/review/view','new@example.test/atmin/review']:
+        for email in ['new@example.test/unknown','new@example.test/admin/view','new@example.test/view/admin',
+                      'new@example.test/review/admin','new@example.test/review/view','new@example.test/admin/review',
+                      'new@example.test/uploder/review','new@example.test/view/uploader','new@example.test/uploder/admin']:
             response=self.post('/api/auth/register',{'email_input':email,'password':PASSWORD})
             self.assertEqual(response.status_code,422)
 
     def test_owner_cannot_register_publicly_or_claim_admin_by_email(self):
-        response = self.post('/api/auth/register', {'email_input':'first.owner@example.test/atmin', 'password':PASSWORD})
+        response = self.post('/api/auth/register', {'email_input':'first.owner@example.test/admin', 'password':PASSWORD})
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json['error']['code'], 'OWNER_SETUP_REQUIRED')
         self.assertEqual(self.login().status_code, 401)
@@ -153,14 +226,14 @@ class LocalAuthTests(unittest.TestCase):
         self.assertNotIn(token, repr(config))
         response = self.post('/api/auth/owner-setup', {'setup_token':token})
         self.assertEqual(response.status_code, 200, response.json)
-        self.assertEqual(response.json['data']['email_input'], 'first.owner@example.test/atmin')
+        self.assertEqual(response.json['data']['email_input'], 'first.owner@example.test/admin')
         config=self.client.get('/api/auth/csrf').json['data']
-        self.assertEqual(config['owner_setup_email_input'],'first.owner@example.test/atmin')
+        self.assertEqual(config['owner_setup_email_input'],'first.owner@example.test/admin')
         self.assertNotIn(token,repr(config))
         with self.db() as db:
             self.assertNotIn(token, db.get(Setting,'owner_setup').value)
             self.assertEqual(db.scalar(select(func.count()).select_from(User)), 0)
-        payload = {'email_input':'first.owner@example.test/atmin', 'display_name':'First Owner', 'password':PASSWORD}
+        payload = {'email_input':'first.owner@example.test/admin', 'display_name':'First Owner', 'password':PASSWORD}
         response = self.post('/api/auth/register', payload)
         self.assertEqual(response.status_code, 201, response.json)
         self.assertEqual(response.json['data']['portal'], 'admin')
@@ -183,9 +256,9 @@ class LocalAuthTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         for token in (None, 'invalid', first, 'x'*43):
             self.assertEqual(self.post('/api/auth/owner-setup', {'setup_token':token}).status_code, 403)
-            response=self.post('/api/auth/register', {'email_input':'first.owner@example.test/atmin', 'password':PASSWORD, 'setup_token':token})
+            response=self.post('/api/auth/register', {'email_input':'first.owner@example.test/admin', 'password':PASSWORD, 'setup_token':token})
             self.assertEqual(response.status_code, 403)
-        response=self.post('/api/auth/register', {'email_input':'other@example.test/atmin', 'password':PASSWORD, 'setup_token':second})
+        response=self.post('/api/auth/register', {'email_input':'other@example.test/admin', 'password':PASSWORD, 'setup_token':second})
         self.assertEqual(response.status_code, 403)
         with self.db.begin() as db:
             import json
@@ -202,7 +275,7 @@ class LocalAuthTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/auth/owner-setup',json={'setup_token':token}).status_code,403)
         payload={'email_input':'first.owner@example.test','password':PASSWORD,'setup_token':token}
         self.assertEqual(self.post('/api/auth/register',payload).status_code,422)
-        payload.update(email_input='first.owner@example.test/atmin',password='short')
+        payload.update(email_input='first.owner@example.test/admin',password='short')
         self.assertEqual(self.post('/api/auth/register',payload).status_code,422)
         self.assertEqual(self.post('/api/auth/owner-setup',{'setup_token':token}).status_code,200)
         payload['password']=PASSWORD
@@ -211,7 +284,7 @@ class LocalAuthTests(unittest.TestCase):
     def test_simultaneous_owner_registration_consumes_capability_once(self):
         from concurrent.futures import ThreadPoolExecutor
         token=prepare_owner_setup(self.app)
-        payload={'email_input':'first.owner@example.test/atmin','password':PASSWORD,'setup_token':token}
+        payload={'email_input':'first.owner@example.test/admin','password':PASSWORD,'setup_token':token}
         def register_once(_):
             return self.post('/api/auth/register',payload,self.app.test_client()).status_code
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -268,7 +341,7 @@ class LocalAuthTests(unittest.TestCase):
         old_csrf = self.client.get('/api/auth/csrf').json['data']['csrf_token']
         response = self.login()
         self.assertNotEqual(old_csrf, response.json['data']['csrf_token'])
-        cookie = self.client.get_cookie('amiga_session')
+        cookie = self.client.get_cookie('amiga_local_review_session')
         self.assertTrue(cookie.http_only)
         self.assertEqual(cookie.same_site, 'Lax')
         with self.client.session_transaction() as session:
@@ -282,10 +355,10 @@ class LocalAuthTests(unittest.TestCase):
             session['auth'] = jwt.encode({**claims, 'exp':datetime.now(timezone.utc)-timedelta(seconds=5)}, signing_key(self.app.config), algorithm='HS256')
         self.assertEqual(self.client.get('/api/auth/me').status_code, 401)
         self.assertEqual(self.login().status_code, 200)
-        old_cookie = self.client.get_cookie('amiga_session').value
+        old_cookie = self.client.get_cookie('amiga_local_review_session').value
         self.assertEqual(self.post('/api/auth/logout', {}).status_code, 200)
         replay = self.app.test_client()
-        replay.set_cookie('amiga_session', old_cookie)
+        replay.set_cookie('amiga_local_review_session', old_cookie)
         self.assertEqual(replay.get('/api/auth/me').status_code, 401)
         self.assertNotIn(original, response.get_data(as_text=True))
 
@@ -343,11 +416,105 @@ class LocalAuthTests(unittest.TestCase):
         restarted = create_app(self.options)
         try:
             with restarted.extensions['amiga_db']() as db:
-                self.assertEqual(db.get(Setting,'schema_version').value, '4')
+                self.assertEqual(db.get(Setting,'schema_version').value, '8')
                 self.assertEqual(db.execute(text('SELECT value FROM legacy_sample')).scalar(), 'preserved')
                 self.assertTrue(verify_password(PASSWORD, db.get(LocalCredential, user_id).password_hash))
             client = restarted.test_client()
-            client.set_cookie('amiga_session', self.client.get_cookie('amiga_session').value)
+            client.set_cookie('amiga_local_review_session', self.client.get_cookie('amiga_local_review_session').value)
             self.assertEqual(client.get('/api/auth/me').status_code, 200)
         finally:
             restarted.extensions['amiga_engine'].dispose()
+
+    def issue_reset(self, user_id, admin=None):
+        if admin is None:
+            self.setup_owner()
+            admin=self.app.test_client()
+            self.assertEqual(self.login(client=admin).status_code,200)
+        response=self.post('/api/admin/users/'+user_id+'/password-reset',{},admin)
+        self.assertEqual(response.status_code,200,response.json)
+        return admin,response.json['data']['reset_code']
+
+    def test_password_change_requires_proof_and_revokes_all_account_sessions(self):
+        self.seed('owner','A');first=self.app.test_client();second=self.app.test_client()
+        self.login('owner@example.test',client=first);self.login('owner@example.test',client=second)
+        new='Updated-Fixture-Password!'
+        payload={'email_input':'owner@example.test','current_password':PASSWORD,'new_password':new,'password_confirm':new}
+        self.assertEqual(self.client.post('/api/auth/password/change',json=payload).status_code,403)
+        bad=self.post('/api/auth/password/change',{**payload,'current_password':'Incorrect-fixture'})
+        self.assertEqual(bad.status_code,401)
+        self.assertEqual(self.post('/api/auth/password/change',{**payload,'password_confirm':'Different-fixture'}).status_code,422)
+        response=self.post('/api/auth/password/change',payload)
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertTrue(response.json['data']['password_changed'])
+        self.assertNotIn(new,response.get_data(as_text=True))
+        self.assertEqual(first.get('/api/auth/me').status_code,401);self.assertEqual(second.get('/api/auth/me').status_code,401)
+        self.assertEqual(self.login('owner@example.test',password=PASSWORD).status_code,401)
+        self.assertEqual(self.login('owner@example.test',password=new).json['data']['portal'],'uploader')
+        with self.db() as db:
+            self.assertTrue(verify_password(new,db.get(LocalCredential,'owner').password_hash))
+            self.assertNotIn(new,repr(list(db.scalars(select(Audit.changes)))))
+
+    def test_password_change_and_login_share_lockout(self):
+        self.seed('owner','A')
+        payload={'email_input':'owner@example.test','current_password':'Incorrect-fixture','new_password':PASSWORD,'password_confirm':PASSWORD}
+        for _ in range(5):self.assertEqual(self.post('/api/auth/password/change',payload).status_code,401)
+        self.assertEqual(self.login('owner@example.test').status_code,429)
+        self.assertEqual(self.post('/api/auth/password/change',{**payload,'current_password':PASSWORD}).status_code,429)
+
+    def test_admin_reset_code_is_one_use_private_and_preserves_role(self):
+        self.seed('owner','A');logged=self.app.test_client();self.login('owner@example.test',client=logged)
+        denied=self.post('/api/admin/users/owner/password-reset',{},logged)
+        self.assertEqual(denied.status_code,403)
+        admin,code=self.issue_reset('owner')
+        with self.db() as db:
+            self.assertNotIn(code,db.get(Setting,'password_reset:owner').value)
+            self.assertNotIn(code,repr(list(db.scalars(select(Audit.changes)))))
+            self.assertTrue(verify_password(PASSWORD,db.get(LocalCredential,'owner').password_hash))
+        new='Reset-Fixture-Password!'
+        payload={'email_input':'owner@example.test','reset_code':code,'new_password':new,'password_confirm':new}
+        self.assertEqual(self.client.post('/api/auth/password/reset',json=payload).status_code,403)
+        result=self.post('/api/auth/password/reset',payload)
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertNotIn(code,result.get_data(as_text=True));self.assertNotIn(new,result.get_data(as_text=True))
+        self.assertEqual(logged.get('/api/auth/me').status_code,401)
+        self.assertEqual(admin.get('/api/auth/me').status_code,200)
+        self.assertEqual(self.post('/api/auth/password/reset',payload).status_code,400)
+        self.assertEqual(self.login('owner@example.test',password=new).json['data']['portal'],'uploader')
+        with self.db() as db:self.assertIsNone(db.get(Setting,'password_reset:owner'))
+
+    def test_password_reset_expiry_reissue_attempt_limit_and_suspension(self):
+        import json
+        self.seed('owner','A');admin,old=self.issue_reset('owner')
+        _,code=self.issue_reset('owner',admin)
+        payload={'email_input':'owner@example.test','reset_code':old,'new_password':PASSWORD,'password_confirm':PASSWORD}
+        self.assertEqual(self.post('/api/auth/password/reset',payload).status_code,400)
+        with self.db.begin() as db:
+            record=db.get(Setting,'password_reset:owner');v=json.loads(record.value);v['expires_at']='2000-01-01T00:00:00Z';record.value=json.dumps(v)
+        self.assertEqual(self.post('/api/auth/password/reset',{**payload,'reset_code':code}).status_code,400)
+        _,code=self.issue_reset('owner',admin)
+        for _ in range(5):self.assertEqual(self.post('/api/auth/password/reset',{**payload,'reset_code':'x'*43}).status_code,400)
+        self.assertEqual(self.post('/api/auth/password/reset',{**payload,'reset_code':code}).status_code,400)
+        _,code=self.issue_reset('owner',admin)
+        with self.db.begin() as db:db.get(User,'owner').account_status='DISABLED'
+        self.assertEqual(self.post('/api/auth/password/reset',{**payload,'reset_code':code}).status_code,400)
+        self.assertEqual(self.post('/api/admin/users/owner/password-reset',{},admin).status_code,403)
+        with self.db() as db:self.assertEqual(db.get(User,'owner').account_status,'DISABLED')
+
+    def test_password_reset_never_grants_pending_company_access_or_accepts_email_alone(self):
+        registered=self.post('/api/auth/register',{'email_input':'pending@example.test','company_name':'PT Fixture','password':PASSWORD}).json['data']
+        admin,code=self.issue_reset(registered['user']['id'])
+        new='Pending-Fixture-Password!'
+        payload={'email_input':'pending@example.test','new_password':new,'password_confirm':new}
+        self.assertEqual(self.post('/api/auth/password/reset',payload).status_code,400)
+        self.assertEqual(self.post('/api/auth/password/reset',{**payload,'email_input':'unknown@example.test','reset_code':code}).status_code,400)
+        self.assertEqual(self.post('/api/auth/password/reset',{**payload,'reset_code':code}).status_code,200)
+        result=self.login('pending@example.test',password=new)
+        self.assertEqual(result.json['data']['user']['account_status'],'PENDING_COMPANY')
+        self.assertEqual(result.json['data']['user']['roles'],[])
+        self.assertEqual(result.json['data']['user']['clients'],[])
+
+    def test_password_change_invalidates_outstanding_code(self):
+        self.seed('owner','A');_,code=self.issue_reset('owner')
+        new='Changed-Fixture-Password!'
+        self.assertEqual(self.post('/api/auth/password/change',{'email_input':'owner@example.test','current_password':PASSWORD,'new_password':new,'password_confirm':new}).status_code,200)
+        self.assertEqual(self.post('/api/auth/password/reset',{'email_input':'owner@example.test','reset_code':code,'new_password':PASSWORD,'password_confirm':PASSWORD}).status_code,400)

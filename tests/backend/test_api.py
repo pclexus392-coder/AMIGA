@@ -18,6 +18,9 @@ from backend.validation import normalize, validate, InvalidDraft
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNTS = {
+    'company': ('company.a@example.test', ['COMPANY_CLIENT'], ['A']),
+    'company2': ('company.second@example.test', ['COMPANY_CLIENT'], ['A']),
+    'company_other': ('company.b@example.test', ['COMPANY_CLIENT'], ['B']),
     'owner': ('owner.a@example.test', ['CLIENT_OWNER'], ['A']),
     'other': ('owner.b@example.test', ['CLIENT_OWNER'], ['B']),
     'finance': ('finance@example.test', ['FINANCE_REVIEWER'], ['A', 'B']),
@@ -187,9 +190,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.call('owner', 'POST', '/api/auth/logout', json={}).status_code, 200)
         self.assertEqual(client.get('/api/auth/me').status_code, 401)
 
-    def test_atmin_is_request_and_persistent_admin_role(self):
+    def test_admin_is_request_and_persistent_admin_role(self):
         self.claims['new'] = {**self.claims['owner'], 'sub': 'new-sub', 'email': 'new@example.test'}
-        client, response = self.login('new', 'new@example.test /atmin')
+        client, response = self.login('new', 'new@example.test /admin')
         self.assertEqual(response.json['data']['user']['account_status'], 'PENDING_ADMIN')
         self.assertEqual(response.json['data']['user']['roles'], [])
         self.assertEqual(client.get('/api/requests').status_code, 403)
@@ -203,14 +206,14 @@ class ApiTests(unittest.TestCase):
             db.execute(delete(Role).where(Role.user_id == 'admin'))
         self.app.config['ADMIN_BOOTSTRAP_EMAIL'] = 'first@example.test'
         self.claims['first'] = {**self.claims['owner'], 'sub': 'first-sub', 'email': 'first@example.test'}
-        _, response = self.login('first', 'first@example.test /atmin')
+        _, response = self.login('first', 'first@example.test /admin')
         self.assertEqual(response.json['data']['user']['roles'], ['SYSTEM_ADMIN'])
         self.assertEqual(response.json['data']['user']['email'], 'first@example.test')
         _, response = self.login('first')
         self.assertEqual(response.json['data']['portal'], 'admin')
         self.app.config['ADMIN_BOOTSTRAP_EMAIL'] = 'second@example.test'
         self.claims['second'] = {**self.claims['first'], 'sub': 'second-sub', 'email': 'second@example.test'}
-        _, response = self.login('second', 'second@example.test /atmin')
+        _, response = self.login('second', 'second@example.test /admin')
         self.assertEqual(response.json['data']['user']['account_status'], 'PENDING_ADMIN')
 
     def test_tenant_isolation_all_object_routes(self):
@@ -307,7 +310,7 @@ class ApiTests(unittest.TestCase):
         resolved = self.call('finance', 'POST', base, json={'expected_version': 2, 'issue_code': 'POSSIBLE_DUPLICATE', 'reason': 'Tagihan berbeda telah diperiksa dari bukti.'})
         self.assertEqual(resolved.status_code, 200, resolved.json)
         self.assertTrue(resolved.json['data']['validation']['valid'])
-        response = self.revise(second)
+        response = self.revise(second, fields={**inv['fields'], 'due_date': '2026-02-01'})
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json['data']['validation']['valid'])
         third = self.processed(content=original_pdf)
@@ -320,7 +323,7 @@ class ApiTests(unittest.TestCase):
         base = f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/"
         draft = self.actor('owner').get(base + 'preview.pdf?version=2')
         self.assertIn('DRAFT', ''.join(p.extract_text() for p in PdfReader(BytesIO(draft.data)).pages))
-        self.assertEqual(self.call('owner', 'POST', base + 'download', json={'expected_version': 2}).status_code, 403)
+        self.assertEqual(self.call('company', 'POST', base + 'download', json={'expected_version': 2}).status_code, 403)
         self.assertEqual(self.decision(req).status_code, 200)
         self.assertEqual(self.actor('owner').get('/api/requests/' + req['id']).json['data']['status'], 'AMIGA_REVIEWED')
         preview = self.actor('owner').get(base + 'preview.pdf?version=2')
@@ -329,13 +332,13 @@ class ApiTests(unittest.TestCase):
         self.assertIn('0000123', text_content)
         self.assertIn('Persetujuan pembayaran', text_content)
         self.assertIn('Barang <b> & jasa', text_content)
-        official = self.call('owner', 'POST', base + 'download', json={'expected_version': 2})
+        official = self.call('company', 'POST', base + 'download', json={'expected_version': 2})
         self.assertEqual(official.status_code, 200)
         self.assertEqual(official.data, preview.data)
         self.assertTrue(official.headers['X-Voucher-ID'])
         self.assertEqual(self.actor('owner').get('/api/requests/' + req['id']).json['data']['status'], 'SENT_TO_CLIENT')
-        self.assertEqual(self.revise(req).status_code, 200)
-        self.assertEqual(self.call('owner', 'POST', base + 'download', json={'expected_version': 3}).status_code, 403)
+        self.assertEqual(self.revise(req, fields={**inv['fields'], 'vendor_name': 'Vendor Uji Terkoreksi'}).status_code, 200)
+        self.assertEqual(self.call('company', 'POST', base + 'download', json={'expected_version': 3}).status_code, 403)
         historical = self.actor('owner').get(base + 'preview.pdf?version=2')
         self.assertEqual(historical.data, official.data)
         with self.app.extensions['amiga_db']() as db:
@@ -351,14 +354,14 @@ class ApiTests(unittest.TestCase):
         approved = []
         for inv in req['invoices']:
             single = {**req, 'invoices': [inv]}
-            revised = self.revise(single)
+            revised = self.revise(single, fields={**inv['fields'], 'vendor_name': 'Vendor Uji Terkoreksi'})
             self.assertEqual(revised.status_code, 200, revised.json)
             single['invoices'][0] = revised.json['data']
             self.assertEqual(self.decision(single).status_code, 200)
             approved.append(single['invoices'][0])
         self.assertEqual(self.actor('owner').get('/api/requests/' + req['id']).json['data']['status'], 'AMIGA_REVIEWED')
         for index, inv in enumerate(approved):
-            result = self.call('owner', 'POST', f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/download", json={'expected_version': 2})
+            result = self.call('company', 'POST', f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/download", json={'expected_version': 2})
             self.assertEqual(result.status_code, 200)
             status = self.actor('owner').get('/api/requests/' + req['id']).json['data']['status']
             self.assertEqual(status, 'SENT_TO_CLIENT' if index == 1 else 'AMIGA_REVIEWED')
@@ -408,7 +411,7 @@ class ApiTests(unittest.TestCase):
         self.actor('owner')
         self.actor('finance')
         def revise_actor(actor):
-            return self.revise(req, actor).status_code
+            return self.revise(req, actor, fields={**inv['fields'], 'vendor_name': 'Vendor revisi '+actor}).status_code
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(revise_actor, ['owner', 'finance']))
         self.assertEqual(sorted(results), [200, 409])
@@ -417,13 +420,27 @@ class ApiTests(unittest.TestCase):
 
     def test_email_dots_and_plus_not_collapsed_and_expired_session(self):
         self.claims['plus'] = {**self.claims['owner'], 'sub': 'plus-sub', 'email': 'a.b+work@example.test'}
-        _, response = self.login('plus')
+        _, response = self.login('plus', email_input='a.b+work@example.test/uploder')
         self.assertEqual(response.json['data']['user']['email'], 'a.b+work@example.test')
+        self.assertEqual(response.json['data']['portal'], 'uploader')
         owner = self.actor('owner')
         with self.app.extensions['amiga_db'].begin() as db:
             for record in db.scalars(select(AuthSession).where(AuthSession.user_id == 'owner')):
                 record.expires_at = '2000-01-01T00:00:00Z'
         self.assertEqual(owner.get('/api/auth/me').status_code, 401)
+
+    def test_new_google_company_has_no_membership_and_suffix_cannot_change_it(self):
+        self.claims['new_company'] = {**self.claims['owner'], 'sub': 'new-company-sub', 'email': 'new.company@example.test'}
+        client = self.app.test_client()
+        token = client.get('/api/auth/csrf').json['data']['csrf_token']
+        response = client.post('/api/auth/google', json={'credential':'new_company',
+            'email_input':'new.company@example.test', 'company_name':'PT Demo'}, headers={'X-CSRF-Token':token})
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['data']['user']['account_status'],'PENDING_COMPANY')
+        self.assertEqual(response.json['data']['user']['clients'],[])
+        self.assertEqual(response.json['data']['user']['roles'],[])
+        self.assertEqual(client.get('/api/requests').status_code,403)
+        self.login('new_company',email_input='new.company@example.test/uploder',expect=403)
 
     def test_bad_dependency_injection_rejected_outside_tests(self):
         with self.assertRaises(RuntimeError):
@@ -491,14 +508,14 @@ class ApiTests(unittest.TestCase):
 
     def test_legacy_data_and_session_survive_factory_restart(self):
         client = self.actor('owner')
-        cookie = client.get_cookie('amiga_session').value
+        cookie = client.get_cookie('amiga_local_review_session').value
         with self.app.extensions['amiga_engine'].begin() as connection:
             connection.execute(text('CREATE TABLE queue_items (document_id TEXT PRIMARY KEY, status TEXT)'))
             connection.execute(text("INSERT INTO queue_items VALUES ('legacy-private', 'APPROVED')"))
         other_app = create_app({**self.app.config, 'START_QUEUE_WORKER': False})
         try:
             other_client = other_app.test_client()
-            other_client.set_cookie('amiga_session', cookie)
+            other_client.set_cookie('amiga_local_review_session', cookie)
             self.assertEqual(other_client.get('/api/auth/me').status_code, 200)
             self.assertEqual(other_client.get('/api/requests').json['data']['total'], 0)
             with other_app.extensions['amiga_engine'].connect() as connection:
@@ -523,7 +540,7 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn('APPROVE', result.json['data']['allowed_actions'])
         # A rejection is terminal for this revision, so it cannot be silently reversed.
         self.assertEqual(self.decision(req).status_code, 409)
-        revised = self.revise(req)
+        revised = self.revise(req, fields={**req['invoices'][0]['fields'], 'vendor_name': 'Vendor Uji Terkoreksi'})
         self.assertEqual(revised.status_code, 200)
         req['invoices'][0] = revised.json['data']
         self.assertEqual(self.decision(req).status_code, 200)

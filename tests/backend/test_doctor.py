@@ -30,7 +30,7 @@ class DoctorTests(unittest.TestCase):
         self.path.write_text('ADMIN_BOOTSTRAP_EMAIL=owner@example.test\n', encoding='utf-8')
         report = inspect_configuration(self.path, environ={})
         self.assertTrue(report['first_admin']['allowlist_configured'])
-        self.assertEqual(report['first_admin']['activation_marker'], '/atmin')
+        self.assertEqual(report['first_admin']['activation_marker'], '/admin')
         self.assertTrue(report['first_admin']['identity_verification_required'])
         self.assertFalse((self.path.parent / 'amiga.db').exists())
 

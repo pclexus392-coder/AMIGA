@@ -32,7 +32,7 @@ Pengunggah invoice atau bukti tidak boleh menyetujui request itu sendiri. Unduha
 
 ## Admin
 
-Untuk meminta akun admin, daftar dengan `nama@gmail.com/atmin`. Setelah aktif, cukup masuk dengan email biasa.
+Untuk meminta akun admin, daftar dengan `nama@gmail.com/admin`. Setelah aktif, cukup masuk dengan email biasa.
 
 1. Buka **Reviewer & akun → Permintaan reviewer → Setujui reviewer**. Persetujuan ini berlaku untuk akses papan tugas bersama.
 2. Buka **Pantau penugasan** untuk melihat pemilik, tenggat, status, serta kendala setiap tugas. Detail tugas menyediakan **Riwayat** dan penugasan ulang selama review belum selesai.

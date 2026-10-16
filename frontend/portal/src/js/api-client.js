@@ -23,6 +23,9 @@ export class ApiClient{
   ownerSetup(setup_token){return this.call('/auth/owner-setup',{method:'POST',body:{setup_token}});}
   login(input){return this.call(this.authMethod==='google'?'/auth/google':'/auth/login',{method:'POST',body:input});}
   register(input){return this.call('/auth/register',{method:'POST',body:input});}
+  changePassword(input){return this.call('/auth/password/change',{method:'POST',body:input});}
+  resetPassword(input){return this.call('/auth/password/reset',{method:'POST',body:input});}
+  issuePasswordReset(user){return this.call('/admin/users/'+id(user)+'/password-reset',{method:'POST',body:{}});}
   async logout(){const value=await this.call('/auth/logout',{method:'POST',body:{}});this.csrf='';await this.config();return value;}
   list(query={}){return this.call('/requests?'+new URLSearchParams(Object.entries(query).filter(([,v])=>v!==undefined&&v!=='')));}
   detail(request){return this.call('/requests/'+id(request));}
@@ -32,6 +35,7 @@ export class ApiClient{
   release(request,reason){return this.call(`/tasks/${id(request)}/release`,{method:'POST',body:{reason}});}
   analysis(request,invoice,body){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/analysis`,body?{method:'POST',body}:{});}
   upload(form){return this.call('/requests',{method:'POST',body:form});}
+  uploadBatch(form){return this.call('/requests/batch',{method:'POST',body:form});}
   document(request,document){return this.call(`/requests/${id(request)}/documents/${id(document)}`,{binary:true});}
   evidence(request,form){return this.call(`/requests/${id(request)}/evidence`,{method:'POST',body:form});}
   process(request,body){return this.call(`/requests/${id(request)}/process`,{method:'POST',body});}
@@ -41,6 +45,7 @@ export class ApiClient{
   voucher(request,invoice,version,official=false){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/voucher/${official?'download':'preview.pdf'}`+(official?'':'?version='+id(version)),official?{method:'POST',body:{expected_version:version},binary:true}:{binary:true});}
   users(){return this.call('/admin/users');}updateUser(user,body){return this.call('/admin/users/'+id(user),{method:'PATCH',body});}
   clients(){return this.call('/admin/clients');}createClient(body){return this.call('/admin/clients',{method:'POST',body});}
+  renameClient(client,body){return this.call('/admin/clients/'+id(client),{method:'PATCH',body});}
   reviewers(request){return this.call(`/requests/${id(request)}/reviewers`);}
   assign(request,body){return this.call(`/requests/${id(request)}/assignment`,{method:'PATCH',body});}
   initialRetry(request,invoice,version){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/initial-analysis/retry`,{method:'POST',body:{expected_version:version}});}
@@ -50,12 +55,22 @@ export class ApiClient{
   agentHistory(request=''){return this.call('/agents/history?'+new URLSearchParams(request?{request_id:request}:{}));}
   agentChat(body){return this.call('/agents/chat',{method:'POST',body});}
   telegramStatus(){return this.call('/telegram/status');}
+  telegramAutomatic(enabled){return this.call('/telegram/automatic',{method:'PATCH',body:{enabled}});}
+  telegramContact(contact){return this.call('/telegram/contact',{method:'PATCH',body:{contact}});}
+  telegramBotStatus(){return this.call('/admin/telegram-bot');}
+  telegramBotSave(body){return this.call('/admin/telegram-bot',{method:'PATCH',body});}
   telegramLink(){return this.call('/telegram/link',{method:'POST',body:{}});}
   telegramVerify(){return this.call('/telegram/verify',{method:'POST',body:{}});}
   telegramUnlink(){return this.call('/telegram/link',{method:'DELETE',body:{}});}
   telegramPreview(request,invoice,body){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/telegram-preview`,{method:'POST',body});}
   telegramSend(preview,hash){return this.call(`/telegram/previews/${id(preview)}/send`,{method:'POST',body:{approved:true,preview_hash:hash}});}
   telegramDeliveries(request){return this.call(`/requests/${id(request)}/telegram-deliveries`);}
+  uploadManual(request,invoice,body){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/manual-pdf`,{method:'POST',body});}
+  manualPDF(request,invoice,pdf){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/manual-pdf/${id(pdf)}`,{binary:true});}
+  manualSignature(request,invoice,pdf,version){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/manual-pdf/${id(pdf)}/signature`,{method:'POST',body:{expected_version:version}});}
+  saveReviewDraft(request,invoice,body){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/review-draft`,{method:'PATCH',body});}
+  saveVoucherTax(request,invoice,body){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/voucher-tax`,{method:'PATCH',body});}
+  analyzeVoucherTax(request,invoice,version){return this.call(`/requests/${id(request)}/invoices/${id(invoice)}/voucher-tax/analyze`,{method:'POST',body:{expected_version:version}});}
   voucherHistory(request){return this.call(`/requests/${id(request)}/voucher-history`);}
   archiveVoucher(request,voucher){return this.call(`/requests/${id(request)}/vouchers/${id(voucher)}/archive-download`,{method:'POST',body:{},binary:true});}
 }

@@ -38,9 +38,11 @@ def update_user(user_id):
         fail(422, 'INVALID_ROLES', 'Role tidak valid.')
     if not isinstance(assigned_clients, list) or any(not isinstance(c, str) or not g.db.get(Client, c) for c in assigned_clients):
         fail(422, 'INVALID_CLIENTS', 'Klien tidak valid.')
-    if status not in ('ACTIVE', 'DISABLED', 'PENDING_CLIENT', 'PENDING_ADMIN', 'PENDING_REVIEWER'):
+    if status not in ('ACTIVE', 'DISABLED', 'PENDING_CLIENT', 'PENDING_ADMIN', 'PENDING_REVIEWER', 'PENDING_COMPANY'):
         fail(422, 'INVALID_STATUS', 'Status akun tidak valid.')
-    if status == 'ACTIVE' and (not assigned_roles or (set(assigned_roles) & CLIENT_ROLES and not assigned_clients)):
+    if 'COMPANY_CLIENT' in assigned_roles and set(assigned_roles)!={'COMPANY_CLIENT'}:
+        fail(422,'ROLE_CONFLICT','Akun Klien perusahaan harus terpisah dari uploader, reviewer dan admin.')
+    if status == 'ACTIVE' and (not assigned_roles or (set(assigned_roles) & (CLIENT_ROLES|{'COMPANY_CLIENT'}) and not assigned_clients)):
         fail(422, 'ASSIGNMENT_REQUIRED', 'Pilih peran. Assignment klien hanya wajib untuk peran klien/backup; reviewer mengambil tugas dari papan bersama.')
     if 'SYSTEM_ADMIN' in assigned_roles and 'FINANCE_REVIEWER' in assigned_roles:
         fail(422, 'ROLE_CONFLICT', 'System Admin dan Finance Reviewer tidak boleh digabung.')
@@ -68,6 +70,19 @@ def update_user(user_id):
     audit(g.db, 'USER_ACCESS_UPDATED', g.actor.id, reason='Akses akun diperbarui',
           changes=[{'field': 'user:' + user.id, 'before': before, 'after': after}])
     return ok(after)
+
+
+@api.patch('/admin/clients/<client_id>')
+def rename_client(client_id):
+    require_role('SYSTEM_ADMIN')
+    data=body();company=g.db.scalar(select(Client).where(Client.id==client_id).with_for_update())
+    if not company:fail(404,'NOT_FOUND','Perusahaan tidak ditemukan.')
+    name=data.get('name')
+    if not isinstance(name,str) or not 2<=len(name.strip())<=200:fail(422,'INVALID_NAME','Nama perusahaan harus 2–200 karakter.')
+    if data.get('expected_name')!=company.name:fail(409,'CLIENT_CHANGED','Nama perusahaan berubah. Muat ulang sebelum menyimpan.')
+    before=company.name;company.name=name.strip()
+    if before!=company.name:audit(g.db,'COMPANY_RENAMED',g.actor.id,changes=[{'field':'client:'+company.id,'before':before,'after':company.name}])
+    return ok({'id':company.id,'name':company.name})
 
 
 

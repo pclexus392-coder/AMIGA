@@ -125,7 +125,7 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(internal.headers['X-Handover-Recorded'],'false')
         internal.close()
         self.assertEqual(a.actor('owner').get('/api/requests/'+req['id']).json['data']['status'],'AMIGA_REVIEWED')
-        external=a.call('owner','POST',url,json={'expected_version':2})
+        external=a.call('company','POST',url,json={'expected_version':2})
         self.assertEqual(external.headers['X-Handover-Recorded'],'true')
         external.close()
         self.assertEqual(a.actor('owner').get('/api/requests/'+req['id']).json['data']['status'],'SENT_TO_CLIENT')
@@ -193,7 +193,7 @@ class TaskTests(unittest.TestCase):
         req=a.confirmed();a.take(req)
         self.assertEqual(a.decision(req).status_code,200)
         self.assertEqual(a.call('admin','PATCH','/api/admin/users/finance',json={'account_status':'DISABLED'}).status_code,200)
-        self.assertEqual(a.revise(req).status_code,200)
+        self.assertEqual(a.revise(req,fields={**req['invoices'][0]['fields'],'vendor_name':'Vendor Uji Terkoreksi'}).status_code,200)
         req=a.actor('owner').get('/api/requests/'+req['id']).json['data']
         a.prepare_review(req)
         board=a.actor('finance2').get('/api/tasks').json['data']

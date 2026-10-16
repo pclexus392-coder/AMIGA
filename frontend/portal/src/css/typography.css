@@ -170,3 +170,6 @@ td { font-size: var(--text-base); line-height: var(--leading-ui); }
 .assistant-launcher,.assistant-chat { font-size:var(--text-base); line-height:var(--leading-body); }
 .assistant-header-actions button { font-size:var(--text-2); line-height:var(--leading-ui); }
 .assistant-chat .agent-answer>strong,.assistant-chat .agent-question>strong { font-size:var(--text-small); font-weight:var(--weight-medium); }
+.workspace-dialog,.reason-text,.review-reason { font-size:var(--text-base); line-height:var(--leading-body); }
+.workspace-dialog-head h2 { font-size:var(--text-1); font-weight:var(--weight-medium); line-height:var(--leading-heading); }
+.pdf-toolbar,.list-open-hint { font-size:var(--text-small); line-height:var(--leading-ui); }

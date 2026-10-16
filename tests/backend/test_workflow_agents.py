@@ -11,6 +11,7 @@ from backend.initial_analysis import process_initial_one
 from backend.models import (InvoiceAssistance,TelegramLink,TelegramDelivery,AgentTurn,Document,Invoice,User,Role,Membership,AuthSession)
 from backend.workflow import source_document
 from backend.telegram_service import TelegramError
+from backend.telegram_config import set_preference,bot_fingerprint
 from backend.agent_service import reply
 from test_tasks import ANALYSIS
 
@@ -42,9 +43,13 @@ class WorkflowAgentTests(unittest.TestCase):
 
     def linked(self):
         self.a.app.config['TELEGRAM_BOT_TOKEN']='fictional-token'
-        with self.a.app.extensions['amiga_db'].begin() as db:db.add(TelegramLink(user_id='owner',chat_id='123456',username='fictional_owner'))
+        with self.a.app.extensions['amiga_db'].begin() as db:
+            db.add(TelegramLink(user_id='company',chat_id='123456',username='fictional_owner'))
+            set_preference(db,'link','company',bot_fingerprint(self.a.app.config))
 
-    def preview(self,req,**changes):
+    def preview(self,req,ensure_official=True,**changes):
+        if ensure_official and self.detail(req)['invoices'][0]['review_status']!='APPROVED':
+            self.assertEqual(self.a.decision(req).status_code,200)
         turn=self.chat(req).json['data'];inv=self.detail(req)['invoices'][0]
         return self.a.call('finance','POST',f"/api/requests/{req['id']}/invoices/{inv['id']}/telegram-preview",json={
             'turn_id':turn['id'],'expected_version':inv['current_version'],**changes})
@@ -91,6 +96,39 @@ class WorkflowAgentTests(unittest.TestCase):
         process_initial_one(self.a.app,req['id']);self.assertEqual(self.confirm(req).status_code,200)
         self.assertEqual(self.a.decision(req).status_code,200)
 
+    def test_unchanged_save_after_confirmation_preserves_version_queue_and_analysis(self):
+        req=self.prepare();original=req['invoices'][0]
+        self.assertTrue(original['uploader_confirmation']['confirmed'])
+        # This is the browser payload, including all retained sources and the
+        # item count confirmed by the uploader rather than an earlier revision.
+        result=self.a.revise(req,field_sources=original['field_sources'])
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertFalse(result.json['data']['revision_created'])
+        current=self.detail(req);inv=current['invoices'][0]
+        self.assertEqual(inv['current_version'],original['current_version'])
+        self.assertEqual(inv['uploader_confirmation'],original['uploader_confirmation'])
+        self.assertEqual(inv['initial_analysis'],original['initial_analysis'])
+        self.assertTrue(current['ready_for_review'])
+        self.assertEqual(self.a.actor('finance').get('/api/tasks').json['data']['total'],1)
+        self.a.take(current)
+        result=self.a.revise(current,account='finance',field_sources=inv['field_sources'])
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertFalse(result.json['data']['revision_created'])
+        current=self.detail(req)
+        self.assertTrue(current['ready_for_review'])
+        self.assertEqual(current['invoices'][0]['current_version'],original['current_version'])
+        self.assertEqual(self.a.decision(current).status_code,200)
+
+    def test_confirmation_count_change_still_creates_revision_and_blocks_queue(self):
+        req=self.prepare();original=req['invoices'][0]
+        response=self.a.revise(req,item_count_confirmed=False,field_sources=original['field_sources'])
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertTrue(response.json['data']['revision_created'])
+        current=self.detail(req)
+        self.assertEqual(current['invoices'][0]['current_version'],original['current_version']+1)
+        self.assertFalse(current['ready_for_review'])
+        self.assertFalse(current['invoices'][0]['uploader_confirmation']['confirmed'])
+
     def test_new_pdf_retains_request_history_and_queues_latest_source(self):
         req=self.prepare();old=req['documents'][0]['id'];inv=req['invoices'][0]
         response=self.a.call('owner','POST',f"/api/requests/{req['id']}/document-revision",data={
@@ -127,7 +165,7 @@ class WorkflowAgentTests(unittest.TestCase):
 
     def test_telegram_absent_is_optional_and_cannot_send(self):
         req=self.prepare();self.a.take(req)
-        self.assertFalse(self.a.actor('owner').get('/api/telegram/status').json['data']['connected'])
+        self.assertFalse(self.a.actor('company').get('/api/telegram/status').json['data']['connected'])
         self.assertEqual(self.preview(req).status_code,409)
         self.assertEqual(self.a.actor('owner').get('/api/requests').status_code,200)
 
@@ -149,7 +187,8 @@ class WorkflowAgentTests(unittest.TestCase):
         req=self.prepare();self.a.take(req);self.linked()
         old=self.preview(req).json['data'];new=self.preview(req,message='Pesan hasil yang sudah diperbarui.').json['data']
         self.assertEqual(self.a.call('finance','POST','/api/telegram/previews/'+old['id']+'/send',json={'approved':True,'preview_hash':old['preview_hash']}).status_code,409)
-        self.a.revise(req)
+        fields=copy.deepcopy(req['invoices'][0]['fields']);fields['vendor_name']='Vendor hasil revisi'
+        self.assertEqual(self.a.revise(req,fields=fields).status_code,200)
         self.assertEqual(self.a.call('finance','POST','/api/telegram/previews/'+new['id']+'/send',json={'approved':True,'preview_hash':new['preview_hash']}).status_code,409)
 
     def test_timeout_is_unknown_and_never_auto_retried(self):
@@ -162,14 +201,14 @@ class WorkflowAgentTests(unittest.TestCase):
 
     def test_private_bot_challenge_verifies_and_unlink_stales_preview(self):
         self.a.app.config['TELEGRAM_BOT_TOKEN']='fictional-token'
-        linked=self.a.call('owner','POST','/api/telegram/link',json={}).json['data']
+        linked=self.a.call('company','POST','/api/telegram/link',json={}).json['data']
         token=linked['url'].split('start=')[1]
         updates=[{'update_id':1,'message':{'text':'/start '+token,'chat':{'type':'private','id':123456},'from':{'id':123456,'username':'fictional'}}}]
         self.a.app.config['TELEGRAM_TRANSPORT']=lambda *args:updates
-        result=self.a.call('owner','POST','/api/telegram/verify',json={})
+        result=self.a.call('company','POST','/api/telegram/verify',json={})
         self.assertTrue(result.json['data']['connected'])
         req=self.prepare();self.a.take(req);row=self.preview(req).json['data']
-        self.a.call('owner','DELETE','/api/telegram/link',json={})
+        self.a.call('company','DELETE','/api/telegram/link',json={})
         sent=self.a.call('finance','POST','/api/telegram/previews/'+row['id']+'/send',json={'approved':True,'preview_hash':row['preview_hash']})
         self.assertEqual(sent.status_code,409)
 
@@ -179,9 +218,9 @@ class WorkflowAgentTests(unittest.TestCase):
         row=next(r for r in report['reviewers'] if r['reviewer_id']=='finance')
         self.assertEqual((row['taken'],row['completed'],row['accepted']),(1,1,0))
         inv=req['invoices'][0]
-        self.a.call('owner','POST',f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/download",json={'expected_version':1})
+        self.a.call('company','POST',f"/api/requests/{req['id']}/invoices/{inv['id']}/voucher/download",json={'expected_version':1})
         current=self.detail(req)
-        self.assertEqual(self.a.call('owner','POST',f"/api/requests/{req['id']}/lifecycle",json={
+        self.assertEqual(self.a.call('company','POST',f"/api/requests/{req['id']}/lifecycle",json={
             'action':'CLOSE','reason':'Hasil telah diperiksa dan diterima.','expected_lifecycle_revision':current['lifecycle']['revision'],
             'expected_versions':{inv['id']:1}}).status_code,200)
         report=self.a.actor('admin').get('/api/agents/overview').json['data']['performance']
@@ -223,7 +262,7 @@ class WorkflowAgentTests(unittest.TestCase):
 
     def test_draft_voucher_cannot_be_sent_as_official_attachment(self):
         req=self.prepare();self.a.take(req);self.linked()
-        self.assertEqual(self.preview(req,include_voucher=True).status_code,409)
+        self.assertEqual(self.preview(req,ensure_official=False,include_voucher=True).status_code,409)
 
     def test_concurrent_send_uses_one_transport_call(self):
         req=self.prepare();self.a.take(req);self.linked()

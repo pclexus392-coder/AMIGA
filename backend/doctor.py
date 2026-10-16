@@ -56,7 +56,7 @@ def inspect_configuration(env_file=None, environ=None):
                            'owner_password_setup': 'Start-AMIGA.cmd opens one-use setup in browser' if auth_method == 'local_password' else None},
         'google': {'client_id_present': present('GOOGLE_CLIENT_ID'), 'live_login_verified': False},
         'first_admin': {'allowlist_configured': present('ADMIN_BOOTSTRAP_EMAIL'),
-                        'activation_marker': '/atmin', 'identity_verification_required': True},
+                        'activation_marker': '/admin', 'identity_verification_required': True},
         'extraction': {'provider': provider, 'model': (values.get('OPENAI_MODEL') or 'gpt-6-luna') if provider == 'openai' else values.get('BEDROCK_MODEL_ID') or None,
                        'model_id_present': bool(values.get('OPENAI_MODEL') or 'gpt-6-luna') if provider == 'openai' else present('BEDROCK_MODEL_ID'),
                        'openai_api_key_present': api_key_present,

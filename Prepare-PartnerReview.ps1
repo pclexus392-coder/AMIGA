@@ -20,6 +20,7 @@ foreach ($folder in @('backend','frontend/portal','frontend/scripts','frontend/t
 foreach ($name in @('.gitignore','.gitattributes','package.json','AGENTS.md','README.md','API_TERBARU.md','DEPLOY_EC2.md','PARTNER_REVIEW.md','Prepare-PartnerReview.ps1','AMIGA_KONTRAK_API.md','CARA_KERJA_AMIGA.md','INTEGRATION_STATUS.md','INTEGRASI_BACKEND_UTAMA.md','FRONTEND_STATUS.md','TIPOGRAFI_AMIGA.md','PERBAIKAN_EKSTRAKSI_INVOICE.md','Start-AMIGA.cmd','Start-Backend.cmd','Setup-Backend.cmd','Setup-Admin-AMIGA.cmd')) {
     if (Test-Path -LiteralPath (Join-Path $projectRoot $name)) { [void]$allowed.Add($name) }
 }
+if (Test-Path -LiteralPath (Join-Path $projectRoot 'CATATAN_DEMO_LOKAL.md')) { [void]$allowed.Add('CATATAN_DEMO_LOKAL.md') }
 $files = @($allowed | Sort-Object)
 if ($files -match '(^|/)(\.env|\.env.source|storage|\.runtime-temp)(/|$)') { throw 'Private files detected in review manifest.' }
 if ($ListOnly) { $files; Write-Output ('Review files: ' + $files.Count); exit 0 }

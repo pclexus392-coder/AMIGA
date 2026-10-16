@@ -222,6 +222,24 @@ class Voucher(Base):
     created_at = Column(String(30), nullable=False)
 
 
+class ManualReviewPDF(Base):
+    __tablename__ = 'amiga_manual_review_pdfs'
+    __table_args__ = (ForeignKeyConstraint(['invoice_id','version'],['amiga_invoice_versions.invoice_id','amiga_invoice_versions.version']),)
+    id = Column(String(80), primary_key=True)
+    invoice_id = Column(String(80), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    uploaded_by = Column(ForeignKey('amiga_users.id'), nullable=False)
+    filename = Column(String(255), nullable=False)
+    pdf = Column(LargeBinary, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    page_count = Column(Integer, nullable=False)
+    created_at = Column(String(30), nullable=False, default=now)
+    signature_state = Column(String(30), nullable=False, default='PENDING')
+    signature_result = Column(JSON)
+    analysis_attempts = Column(Integer, nullable=False, default=0)
+    analysis_started_at = Column(String(30))
+
+
 class Handover(Base):
     __tablename__ = 'amiga_handovers'
     id = Column(String(80), primary_key=True)
@@ -325,6 +343,76 @@ class TelegramDelivery(Base):
     sent_at = Column(String(30))
     message_id = Column(String(50))
     error_code = Column(String(80))
+
+
+class TelegramAutomaticDelivery(Base):
+    __tablename__ = 'amiga_telegram_automatic_deliveries'
+    __table_args__ = (UniqueConstraint('voucher_id','recipient_id'),)
+    delivery_id = Column(ForeignKey('amiga_telegram_deliveries.id'), primary_key=True)
+    voucher_id = Column(ForeignKey('amiga_vouchers.id'), nullable=False)
+    recipient_id = Column(ForeignKey('amiga_users.id'), nullable=False)
+
+
+class UploadBatch(Base):
+    __tablename__ = 'amiga_upload_batches'
+    __table_args__ = (UniqueConstraint('uploaded_by','idempotency_key'),)
+    id = Column(String(80), primary_key=True)
+    client_id = Column(ForeignKey('amiga_clients.id'), nullable=False)
+    uploaded_by = Column(ForeignKey('amiga_users.id'), nullable=False)
+    idempotency_key = Column(String(80), nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    created_at = Column(String(30), nullable=False, default=now)
+
+
+class RequestIntake(Base):
+    __tablename__ = 'amiga_request_intakes'
+    request_id = Column(ForeignKey('amiga_requests.id'), primary_key=True)
+    batch_id = Column(ForeignKey('amiga_upload_batches.id'), nullable=False, index=True)
+    source_group = Column(String(80), nullable=False, index=True)
+    invoice_number = Column(String(2000))
+    vendor_name = Column(String(2000))
+    selected = Column(Integer, nullable=False, default=0)
+
+
+class InvoiceTaxPlan(Base):
+    __tablename__ = 'amiga_invoice_tax_plans'
+    __table_args__ = (ForeignKeyConstraint(['invoice_id','version'],['amiga_invoice_versions.invoice_id','amiga_invoice_versions.version']),)
+    invoice_id = Column(String(80), primary_key=True)
+    version = Column(Integer, primary_key=True)
+    revision = Column(Integer, nullable=False, default=0)
+    vat_mode = Column(String(20), nullable=False, default='KEEP')
+    vat_rate = Column(Text, nullable=False, default='0')
+    vat_base = Column(Text, nullable=False, default='0')
+    withholding_mode = Column(String(20), nullable=False, default='KEEP')
+    withholding_kind = Column(String(80), nullable=False, default='PPh')
+    withholding_rate = Column(Text, nullable=False, default='0')
+    withholding_base = Column(Text, nullable=False, default='0')
+    source_withholding = Column(Text, nullable=False, default='0')
+    withholding_amount = Column(Text)  # Optional exact reviewer correction, not an AI lock.
+    note = Column(Text, nullable=False, default='')
+    edited_by = Column(ForeignKey('amiga_users.id'))
+    edited_at = Column(String(30))
+    ai_state = Column(String(20), nullable=False, default='PENDING')
+    ai_result = Column(JSON)
+    ai_attempts = Column(Integer, nullable=False, default=0)
+    ai_started_at = Column(String(30))
+    ai_input_hash = Column(String(64))
+
+
+class CompanyNumber(Base):
+    __tablename__ = 'amiga_company_numbers'
+    client_id = Column(ForeignKey('amiga_clients.id'), primary_key=True)
+    number = Column(Integer, nullable=False, unique=True)
+    next_request = Column(Integer, nullable=False, default=1)
+
+
+class RequestNumber(Base):
+    __tablename__ = 'amiga_request_numbers'
+    __table_args__ = (UniqueConstraint('client_id', 'sequence'),)
+    request_id = Column(ForeignKey('amiga_requests.id'), primary_key=True)
+    client_id = Column(ForeignKey('amiga_clients.id'), nullable=False)
+    sequence = Column(Integer, nullable=False)
+    code = Column(String(160), nullable=False, unique=True)
 
 
 WORKFLOW_TABLES = {'amiga_request_sources','amiga_invoice_assistance','amiga_uploader_confirmations',

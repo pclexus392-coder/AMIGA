@@ -1,5 +1,6 @@
 """Optional private-chat transport. Never log bot URLs/tokens or retry a send."""
 import requests
+from .telegram_config import bot_settings
 
 
 class TelegramError(Exception):
@@ -9,6 +10,7 @@ class TelegramError(Exception):
 
 
 def telegram_call(method,payload,config,pdf=None):
+    config=bot_settings(config)
     token=config.get('TELEGRAM_BOT_TOKEN')
     if not token:raise TelegramError('TELEGRAM_NOT_CONFIGURED')
     transport=config.get('TELEGRAM_TRANSPORT')

@@ -17,9 +17,9 @@ Tanggal: 15 Oktober 2026. Status: diimplementasikan Codex di workspace tetap dan
 |---|---|---|
 | GET `/api/auth/csrf` | — | csrf_token, auth_method, google_client_id, auth_configured |
 | POST `/api/auth/register` | email_input, password, display_name opsional | UserSession pending, 201 |
-| POST `/api/auth/owner-setup` | setup_token dari launcher + CSRF | email_input pemilik + /atmin; capability cookie HttpOnly |
-| POST `/api/auth/login` | email_input (boleh `/atmin` atau `/review`), password | UserSession |
-| POST `/api/auth/google` | credential, email_input (boleh `/atmin`); AUTH_METHOD=google saja | UserSession |
+| POST `/api/auth/owner-setup` | setup_token dari launcher + CSRF | email_input pemilik + /admin; capability cookie HttpOnly |
+| POST `/api/auth/login` | email_input (boleh `/admin` atau `/review`), password | UserSession |
+| POST `/api/auth/google` | credential, email_input (boleh `/admin`); AUTH_METHOD=google saja | UserSession |
 | GET `/api/auth/me` | cookie sesi | UserSession |
 | POST `/api/auth/logout` | CSRF | `{logged_out:true}` |
 
@@ -43,13 +43,13 @@ UserSession:
 
 portal: `admin` (System Admin/Service Lead), `reviewer` (Finance Reviewer), `client`, atau `pending`. Account status: ACTIVE/PENDING_ADMIN/PENDING_REVIEWER/PENDING_CLIENT/DISABLED. Akun pending hanya boleh membaca status dirinya dan logout; dokumen tidak dapat diakses. Google sub disimpan server dan tidak perlu dikirim ke frontend. Email contoh adalah ilustrasi, bukan bootstrap admin sebenarnya.
 
-Suffix `/atmin` dibuang sebelum menyimpan email; berfungsi sebagai permintaan aktivasi, bukan bukti otorisasi. FIRST ADMIN memerlukan provisioning/allowlist server. Admin terdaftar tidak perlu suffix pada login berikutnya. Kebijakan masa sesi configurable dan terdokumentasi, tidak login abadi.
+Suffix `/admin` dibuang sebelum menyimpan email; berfungsi sebagai permintaan aktivasi, bukan bukti otorisasi. FIRST ADMIN memerlukan provisioning/allowlist server. Admin terdaftar tidak perlu suffix pada login berikutnya. Kebijakan masa sesi configurable dan terdokumentasi, tidak login abadi.
 
 Default lokal: password bcrypt cost 12, minimal 10 karakter dan maksimal 72 byte UTF-8. JWT HS256 dengan sub/iat/exp/jti/iss/aud berada dalam cookie HttpOnly (SameSite Lax, Secure pada produksi); frontend tidak menyimpan token/password di localStorage dan tidak perlu mengirim Bearer header. AuthSession menyimpan hash token untuk pencabutan segera pada logout/perubahan akses. Role dan tenant dibaca server pada setiap request, tidak dipercaya dari token atau formulir. Lima password salah mengunci akun 15 menit (429 LOGIN_LOCKED); pesan password salah generik 401 INVALID_CREDENTIALS.
 
-Pendaftaran biasa membuat CLIENT_OWNER aktif pada tenant baru yang privat; tidak pernah memberi akses ke tenant existing atau peran internal. /review membuat PENDING_REVIEWER tanpa role dan /atmin membuat PENDING_ADMIN tanpa role. DTO user menyertakan requested_role (FINANCE_REVIEWER/SYSTEM_ADMIN/null) agar pengelola melihat permintaan. Launcher lokal membuat capability acak sekali pakai (30 menit) untuk pemilik allowlist dan membuka /login#owner-setup=KODE. Frontend menghapus fragmen dari address bar dan memverifikasi lewat POST owner-setup. Capability tersimpan pada cookie HttpOnly bertanda tangan; GET csrf hanya memberi owner_setup_email_input ketika capability masih sah, tanpa mengembalikan kodenya. Pemilik membuat password sendiri pada formulir daftar. POST register dengan email pemilik/atmin dan capability sah membuat kredensial dan SYSTEM_ADMIN, lalu menghabiskan capability/setting bootstrap secara atomik. Payload setup_token juga dapat diterima untuk registrasi pertama, tetapi frontend default memakai cookie setelah verifikasi.
+Pendaftaran biasa membuat CLIENT_OWNER aktif pada tenant baru yang privat; tidak pernah memberi akses ke tenant existing atau peran internal. /review membuat PENDING_REVIEWER tanpa role dan /admin membuat PENDING_ADMIN tanpa role. DTO user menyertakan requested_role (FINANCE_REVIEWER/SYSTEM_ADMIN/null) agar pengelola melihat permintaan. Launcher lokal membuat capability acak sekali pakai (30 menit) untuk pemilik allowlist dan membuka /login#owner-setup=KODE. Frontend menghapus fragmen dari address bar dan memverifikasi lewat POST owner-setup. Capability tersimpan pada cookie HttpOnly bertanda tangan; GET csrf hanya memberi owner_setup_email_input ketika capability masih sah, tanpa mengembalikan kodenya. Pemilik membuat password sendiri pada formulir daftar. POST register dengan email pemilik/admin dan capability sah membuat kredensial dan SYSTEM_ADMIN, lalu menghabiskan capability/setting bootstrap secara atomik. Payload setup_token juga dapat diterima untuk registrasi pertama, tetapi frontend default memakai cookie setelah verifikasi.
 
-Pendaftaran email pemilik tanpa capability ditolak OWNER_SETUP_REQUIRED. Capability salah, expired, email lain, tanpa /atmin atau dipakai ulang ditolak; validasi password gagal tidak menghabiskannya. Tidak ada verifikasi kepemilikan Gmail/email atau pengiriman OTP. Pendaftaran publik tidak dapat memasang password pada akun existing. CLI setup-admin dengan input tersembunyi tetap tersedia sebagai jalur operator alternatif. Tidak ada password yang dibuat oleh admin untuk pengguna lain.
+Pendaftaran email pemilik tanpa capability ditolak OWNER_SETUP_REQUIRED. Capability salah, expired, email lain, tanpa /admin atau dipakai ulang ditolak; validasi password gagal tidak menghabiskannya. Tidak ada verifikasi kepemilikan Gmail/email atau pengiriman OTP. Pendaftaran publik tidak dapat memasang password pada akun existing. CLI setup-admin dengan input tersembunyi tetap tersedia sebagai jalur operator alternatif. Tidak ada password yang dibuat oleh admin untuk pengguna lain.
 
 ## Request dan dokumen
 
@@ -134,7 +134,7 @@ FieldSource: map field/path → `{document_id,page?,source_type,notes?}`. source
 
 Prioritas 1: auth/me/logout, provisioning aman, tenant migration, guard semua route lama, request list/detail/original. Prioritas 2: upload/process/review/version/voucher/audit API. Prioritas 3: pengelolaan akun/assignment lengkap. Laporkan endpoint yang belum tersedia; frontend tidak menggantinya diam-diam dengan data simulasi ketika mode live dipilih.
 
-Mode demo lama tetap boleh berdiri terpisah dengan penanda yang jelas. Produksi tidak boleh menerima selector user demo, email-only login, ID token tanpa verifikasi, atau suffix `/atmin` sebagai satu-satunya sumber kewenangan.
+Mode demo lama tetap boleh berdiri terpisah dengan penanda yang jelas. Produksi tidak boleh menerima selector user demo, email-only login, ID token tanpa verifikasi, atau suffix `/admin` sebagai satu-satunya sumber kewenangan.
 
 ## Tambahan implementasi Codex (15 Oktober 2026)
 

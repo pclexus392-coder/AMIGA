@@ -17,3 +17,16 @@ deploy/**/*.env
 deploy/**/*.key
 deploy/**/*.pem
 *.tar.gz
+
+# Local reports, generated documents, databases and credential files.
+output/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.key
+*.pem
+.session-secret
+.telegram-bot.json
+UJI_TELEGRAM_NYATA.md
